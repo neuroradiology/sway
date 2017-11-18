@@ -4,12 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <wlc/wlc.h>
 #include "sway/commands.h"
 #include "sway/layout.h"
 #include "sway/focus.h"
 #include "sway/input_state.h"
-#include "sway/handlers.h"
 #include "log.h"
 
 enum resize_dim_types {
@@ -160,6 +158,7 @@ static bool resize_tiled(int amount, bool use_width) {
 					pixels /= 2;
 				}
 				sway_log(L_DEBUG, "%p: %s", sibling, is_before ? "before" : "after");
+				/* TODO WLR
 				if (use_major) {
 					for (int j = i; j < next_i; ++j) {
 						recursive_resize(parent->children->items[j], pixels,
@@ -173,7 +172,9 @@ static bool resize_tiled(int amount, bool use_width) {
 							(is_before ? WLC_RESIZE_EDGE_RIGHT : WLC_RESIZE_EDGE_LEFT) :
 							(is_before ? WLC_RESIZE_EDGE_BOTTOM : WLC_RESIZE_EDGE_TOP));
 				}
+				*/
 			} else {
+				/* TODO WLR
 				if (use_major) {
 					for (int j = i; j < next_i; ++j) {
 						recursive_resize(parent->children->items[j], pixels / 2,
@@ -187,6 +188,7 @@ static bool resize_tiled(int amount, bool use_width) {
 					recursive_resize(sibling, pixels / 2,
 							 use_width ? WLC_RESIZE_EDGE_RIGHT : WLC_RESIZE_EDGE_BOTTOM);
 				}
+				*/
 			}
 			i = next_i;
 		}

@@ -1,6 +1,5 @@
 #include <string.h>
 #include <strings.h>
-#include <wlc/wlc.h>
 #include "sway/commands.h"
 #include "sway/container.h"
 #include "sway/focus.h"
@@ -10,9 +9,11 @@ static swayc_t *fetch_view_from_scratchpad() {
 	sp_index = (sp_index + 1) % scratchpad->length;
 	swayc_t *view = scratchpad->items[sp_index];
 
+	/* TODO WLR
 	if (wlc_view_get_output(view->handle) != swayc_active_output()->handle) {
 		wlc_view_set_output(view->handle, swayc_active_output()->handle);
 	}
+	*/
 	if (!view->is_floating) {
 		view->width = swayc_active_workspace()->width * 0.5;
 		view->height = swayc_active_workspace()->height * 0.75;
@@ -27,7 +28,8 @@ static swayc_t *fetch_view_from_scratchpad() {
 	}
 
 	add_floating(swayc_active_workspace(), view);
-	wlc_view_set_mask(view->handle, VISIBLE);
+	// TODO WLR
+	//wlc_view_set_mask(view->handle, VISIBLE);
 	view->visible = true;
 	arrange_windows(swayc_active_workspace(), -1, -1);
 	set_focused_container(view);

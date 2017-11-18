@@ -1,6 +1,5 @@
 #ifndef _SWAY_BORDER_H
 #define _SWAY_BORDER_H
-#include <wlc/wlc.h>
 #include "container.h"
 
 /**
@@ -8,7 +7,8 @@
  */
 struct border {
 	unsigned char *buffer;
-	struct wlc_geometry geometry;
+	// TODO WLR
+	//struct wlc_geometry geometry;
 };
 
 /**
@@ -21,7 +21,8 @@ void border_clear(struct border *border);
  */
 void update_container_border(swayc_t *container);
 
-void render_view_borders(wlc_handle view);
+// TODO WLR
+//void render_view_borders(wlc_handle view);
 int get_font_text_height(const char *font);
 bool should_hide_top_border(swayc_t *con, double y);
 

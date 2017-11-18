@@ -6,13 +6,7 @@
 #include "log.h"
 #include "list.h"
 
-void output_get_scaled_size(wlc_handle handle, struct wlc_size *size) {
-	*size = *wlc_output_get_resolution(handle);
-	uint32_t scale = wlc_output_get_scale(handle);
-	size->w /= scale;
-	size->h /= scale;
-}
-
+/* TODO WLR
 swayc_t *output_by_name(const char* name, const struct wlc_point *abs_pos) {
 	swayc_t *output = NULL;
 	// If there is no output directly next to the current one, use
@@ -254,6 +248,7 @@ void get_absolute_center_position(swayc_t *container, struct wlc_point *point) {
 	point->x += container->width/2;
 	point->y += container->height/2;
 }
+*/
 
 static int sort_workspace_cmp_qsort(const void *_a, const void *_b) {
 	swayc_t *a = *(void **)_a;

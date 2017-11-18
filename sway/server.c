@@ -34,6 +34,9 @@ bool server_init(struct sway_server *server) {
 	wl_signal_add(&server->backend->events.output_remove,
 			&server->output_remove);
 
+	server->compositor = wlr_compositor_create(
+			server->wl_display, server->renderer);
+
 	server->xdg_shell_v6 = wlr_xdg_shell_v6_create(server->wl_display);
 	wl_signal_add(&server->xdg_shell_v6->events.new_surface,
 		&server->xdg_shell_v6_surface);

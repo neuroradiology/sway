@@ -8,7 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <wlc/wlc.h>
 #include <xkbcommon/xkbcommon-names.h>
 #include "log.h"
 #include "readline.h"
@@ -25,6 +24,7 @@ int numlen(int n) {
 	return log10(n) + 1;
 }
 
+/* TODO WLR
 static struct modifier_key {
 	char *name;
 	uint32_t mod;
@@ -76,6 +76,7 @@ int get_modifier_names(const char **names, uint32_t modifier_masks) {
 
 	return length;
 }
+*/
 
 pid_t get_parent_pid(pid_t child) {
 	pid_t parent = -1;

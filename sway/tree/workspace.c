@@ -3,7 +3,6 @@
 #include <stdbool.h>
 #include <limits.h>
 #include <ctype.h>
-#include <wlc/wlc.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/types.h>
@@ -11,7 +10,6 @@
 #include "sway/workspace.h"
 #include "sway/layout.h"
 #include "sway/container.h"
-#include "sway/handlers.h"
 #include "sway/config.h"
 #include "sway/focus.h"
 #include "stringop.h"

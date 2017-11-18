@@ -1,4 +1,3 @@
-#include <wlc/wlc.h>
 #include <unistd.h>
 #include <string.h>
 #include "sway/commands.h"
@@ -30,7 +29,8 @@ struct cmd_results *cmd_clipboard(int argc, char **argv) {
 	};
 
 	char *str = join_args(argv, argc);
-	wlc_set_selection(str, types, 2, &send_clipboard);
+	// TODO WLR
+	//wlc_set_selection(str, types, 2, &send_clipboard);
 
 	free(current_data);
 	current_data = str;

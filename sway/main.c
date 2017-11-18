@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -17,7 +18,6 @@
 #include "sway/layout.h"
 #include "sway/config.h"
 #include "sway/security.h"
-#include "sway/handlers.h"
 #include "sway/input.h"
 #include "sway/ipc-server.h"
 #include "sway/server.h"

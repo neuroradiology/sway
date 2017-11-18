@@ -1,7 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include <string.h>
 #include <strings.h>
-#include <wlc/wlc.h>
 #include "sway/commands.h"
 #include "sway/container.h"
 #include "sway/layout.h"
@@ -83,6 +82,7 @@ struct cmd_results *cmd_move(int argc, char **argv) {
 		} else if (strcasecmp(argv[1], "to") == 0 && strcasecmp(argv[2], "output") == 0) {
 			// move container to output x
 			swayc_t *output = NULL;
+			/* TODO WLR
 			struct wlc_point abs_pos;
 			get_absolute_center_position(view, &abs_pos);
 			if (view->type == C_WORKSPACE) {
@@ -103,11 +103,13 @@ struct cmd_results *cmd_move(int argc, char **argv) {
 			} else {
 				move_container_to(view, container);
 			}
+			*/
 		} else {
 			return cmd_results_new(CMD_INVALID, "move", expected_syntax);
 		}
 	} else if (strcasecmp(argv[0], "workspace") == 0) {
 		// move workspace (to output x)
+		/*
 		swayc_t *output = NULL;
 		struct wlc_point abs_pos;
 		get_absolute_center_position(view, &abs_pos);
@@ -127,6 +129,7 @@ struct cmd_results *cmd_move(int argc, char **argv) {
 			swayc_t *workspace = swayc_parent_by_type(view, C_WORKSPACE);
 			move_workspace_to(workspace, output);
 		}
+		*/
 	} else if (strcasecmp(argv[0], "scratchpad") == 0 || (strcasecmp(argv[0], "to") == 0 && strcasecmp(argv[1], "scratchpad") == 0)) {
 		// move scratchpad ...
 		if (view->type != C_CONTAINER && view->type != C_VIEW) {
@@ -147,7 +150,8 @@ struct cmd_results *cmd_move(int argc, char **argv) {
 		} else {
 			remove_child(view);
 		}
-		wlc_view_set_mask(view->handle, 0);
+		// TODO WLR
+		//wlc_view_set_mask(view->handle, 0);
 		arrange_windows(swayc_active_workspace(), -1, -1);
 		swayc_t *focused = container_under_pointer();
 		if (focused == NULL) {
@@ -163,6 +167,7 @@ struct cmd_results *cmd_move(int argc, char **argv) {
 		}
 
 		if (view->is_floating) {
+			/* TODO WLR
 			swayc_t *output = swayc_parent_by_type(view, C_OUTPUT);
 			struct wlc_geometry g;
 			wlc_view_get_visible_geometry(view->handle, &g);
@@ -181,6 +186,7 @@ struct cmd_results *cmd_move(int argc, char **argv) {
 			view->y = g.origin.y = MIN((int32_t)h, MAX(y, 0));
 
 			wlc_view_set_geometry(view->handle, 0, &g);
+			*/
 		}
 	} else {
 		return cmd_results_new(CMD_INVALID, "move", expected_syntax);

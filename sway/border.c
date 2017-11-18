@@ -1,5 +1,4 @@
 #define _XOPEN_SOURCE 700
-#include <wlc/wlc-render.h>
 #include <cairo/cairo.h>
 #include <pango/pangocairo.h>
 #include <stdlib.h>
@@ -29,6 +28,7 @@ void border_clear(struct border *border) {
 	}
 }
 
+/* TODO WLR
 static cairo_t *create_border_buffer(swayc_t *view, struct wlc_geometry g, cairo_surface_t **surface) {
 	if (view->border == NULL) {
 		view->border = malloc(sizeof(struct border));
@@ -62,6 +62,7 @@ static cairo_t *create_border_buffer(swayc_t *view, struct wlc_geometry g, cairo
 	}
 	return cr;
 }
+*/
 
 // TODO: move to client/cairo.h when local set_source_u32 is fixed.
 /**
@@ -106,6 +107,7 @@ int get_font_text_height(const char *font) {
 	return height;
 }
 
+/* TODO WLR
 static void render_borders(swayc_t *view, cairo_t *cr, struct border_colors *colors, bool top) {
 	struct wlc_geometry *g = &view->border->geometry;
 	struct wlc_geometry *b = &view->border_geometry;
@@ -243,6 +245,7 @@ static void render_title_bar(swayc_t *view, cairo_t *cr, struct wlc_geometry *b,
 				tb->size.w, 1);
 	}
 }
+*/
 
 /**
  * Generate nested container title for tabbed/stacked layouts
@@ -318,6 +321,7 @@ static char *generate_container_title(swayc_t *container) {
 	return container->name + 6; // don't include "sway: "
 }
 
+/* TODO WLR
 void update_tabbed_stacked_titlebars(swayc_t *c, cairo_t *cr, struct wlc_geometry *g, swayc_t *focused, swayc_t *focused_inactive) {
 	if (c->type == C_CONTAINER) {
 		if (c->parent->focused == c) {
@@ -347,6 +351,7 @@ void update_tabbed_stacked_titlebars(swayc_t *c, cairo_t *cr, struct wlc_geometr
 		}
 	}
 }
+*/
 
 static void update_view_border(swayc_t *view) {
 	if (!view->visible) {
@@ -379,6 +384,7 @@ static void update_view_border(swayc_t *view) {
 	// titlebars of the hidden views.
 	swayc_t *p = NULL;
 	if (view->parent->focused == view && (p = swayc_tabbed_stacked_ancestor(view))) {
+		/* TODO WLR
 		struct wlc_geometry g = {
 			.origin = {
 				.x = p->x,
@@ -411,6 +417,7 @@ static void update_view_border(swayc_t *view) {
 		}
 
 		update_tabbed_stacked_titlebars(p, cr, &g, focused, focused_inactive);
+		*/
 	} else {
 		switch (view->border_type) {
 		case B_NONE:
@@ -477,6 +484,7 @@ void update_container_border(swayc_t *container) {
 	}
 }
 
+/* TODO WLR
 void render_view_borders(wlc_handle view) {
 	swayc_t *c = swayc_by_handle(view);
 
@@ -494,6 +502,7 @@ void render_view_borders(wlc_handle view) {
 		wlc_pixels_write(WLC_RGBA8888, &c->border->geometry, c->border->buffer);
 	}
 }
+*/
 
 bool should_hide_top_border(swayc_t *con, double y) {
 	// returns true if container is child of tabbed/stacked layout and is

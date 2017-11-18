@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <math.h>
-#include <wlc/wlc.h>
 #include "sway/config.h"
 #include "sway/container.h"
 #include "sway/workspace.h"
@@ -27,7 +26,7 @@ void init_layout(void) {
 	root_container.layout = L_NONE;
 	root_container.name = strdup("root");
 	root_container.children = create_list();
-	root_container.handle = -1;
+	// TODO WLR: put a wlr_output_layout in the root_container's handle
 	root_container.visible = true;
 	current_focus = &root_container;
 	scratchpad = create_list();
@@ -206,7 +205,8 @@ swayc_t *replace_child(swayc_t *child, swayc_t *new_child) {
 
 	// deactivate child
 	if (child->type == C_VIEW) {
-		wlc_view_set_state(child->handle, WLC_BIT_ACTIVATED, false);
+		// TODO WLR
+		//wlc_view_set_state(child->handle, WLC_BIT_ACTIVATED, false);
 	}
 	return parent;
 }
@@ -280,7 +280,8 @@ swayc_t *remove_child(swayc_t *child) {
 	child->parent = NULL;
 	// deactivate view
 	if (child->type == C_VIEW) {
-		wlc_view_set_state(child->handle, WLC_BIT_ACTIVATED, false);
+		// TODO WLR
+		//wlc_view_set_state(child->handle, WLC_BIT_ACTIVATED, false);
 	}
 	return parent;
 }
@@ -348,6 +349,9 @@ static void swap_children(swayc_t *container, int a, int b) {
 		}
 	}
 }
+
+#define MIN(a, b) (a < b ? a : b)
+#define MAX(a, b) (a > b ? a : b)
 
 void move_container(swayc_t *container, enum movement_direction dir, int move_amt) {
 	enum swayc_layouts layout = L_NONE;
@@ -480,12 +484,14 @@ void move_container(swayc_t *container, enum movement_direction dir, int move_am
 			continue;
 		}
 		if (parent->type == C_WORKSPACE) {
+			/* TODO WLR
 			// If moving to an adjacent output we need a starting position (since this
 			// output might border to multiple outputs).
 			struct wlc_point abs_pos;
 			get_absolute_center_position(container, &abs_pos);
 
-			swayc_t *output = swayc_adjacent_output(parent->parent, dir, &abs_pos, true);
+			swayc_t *output = swayc_adjacent_output(
+					parent->parent, dir, &abs_pos, true);
 
 			if (output) {
 				sway_log(L_DEBUG, "Moving between outputs");
@@ -524,6 +530,7 @@ void move_container(swayc_t *container, enum movement_direction dir, int move_am
 			// Previous line set the resulting container's layout to
 			// workspace_layout. It should have been just layout.
 			parent->layout = parent->parent->layout;
+			*/
 		}
 		ascended = true;
 		child = parent;
@@ -571,11 +578,9 @@ void move_container_to(swayc_t* container, swayc_t* destination) {
 	swayc_t *op2 = swayc_parent_by_type(parent, C_OUTPUT);
 	set_focused_container(get_focused_view(op1));
 	arrange_windows(op1, -1, -1);
-	update_visibility(op1);
 	if (op1 != op2) {
 		set_focused_container(get_focused_view(op2));
 		arrange_windows(op2, -1, -1);
-		update_visibility(op2);
 	}
 }
 
@@ -591,7 +596,6 @@ void move_workspace_to(swayc_t* workspace, swayc_t* destination) {
 	// Refocus destination (change to new workspace)
 	set_focused_container(get_focused_view(workspace));
 	arrange_windows(destination, -1, -1);
-	update_visibility(destination);
 
 	// make sure source output has a workspace
 	if (src_op->children->length == 0) {
@@ -601,9 +605,9 @@ void move_workspace_to(swayc_t* workspace, swayc_t* destination) {
 		free(ws_name);
 	}
 	set_focused_container(get_focused_view(src_op));
-	update_visibility(src_op);
 }
 
+/*
 static void adjust_border_geometry(swayc_t *c, struct wlc_geometry *g,
 	const struct wlc_size *res, int left, int right, int top, int bottom) {
 
@@ -625,7 +629,9 @@ static void adjust_border_geometry(swayc_t *c, struct wlc_geometry *g,
 	g->origin.y = MIN((uint32_t)MAX(g->origin.y - top, 0), res->h);
 
 }
+*/
 
+/* TODO WLR
 static void update_border_geometry_floating(swayc_t *c, struct wlc_geometry *geometry) {
 	struct wlc_geometry g = *geometry;
 	c->actual_geometry = g;
@@ -668,6 +674,7 @@ static void update_border_geometry_floating(swayc_t *c, struct wlc_geometry *geo
 
 	update_container_border(c);
 }
+*/
 
 void update_layout_geometry(swayc_t *parent, enum swayc_layouts prev_layout) {
 	switch (parent->layout) {
@@ -678,10 +685,10 @@ void update_layout_geometry(swayc_t *parent, enum swayc_layouts prev_layout) {
 			int i;
 			for (i = 0; i < parent->children->length; ++i) {
 				swayc_t *child = parent->children->items[i];
-				child->cached_geometry.origin.x = child->x;
-				child->cached_geometry.origin.y = child->y;
-				child->cached_geometry.size.w = child->width;
-				child->cached_geometry.size.h = child->height;
+				child->cached_geometry.x = child->x;
+				child->cached_geometry.y = child->y;
+				child->cached_geometry.width = child->width;
+				child->cached_geometry.height = child->height;
 			}
 		}
 		break;
@@ -690,6 +697,7 @@ void update_layout_geometry(swayc_t *parent, enum swayc_layouts prev_layout) {
 			// recover cached geometry for all non-float children
 			int i;
 			for (i = 0; i < parent->children->length; ++i) {
+				/* TODO WLR
 				swayc_t *child = parent->children->items[i];
 				// only recoverer cached geometry if non-zero
 				if (!wlc_geometry_equals(&child->cached_geometry, &wlc_geometry_zero)) {
@@ -698,13 +706,15 @@ void update_layout_geometry(swayc_t *parent, enum swayc_layouts prev_layout) {
 					child->width = child->cached_geometry.size.w;
 					child->height = child->cached_geometry.size.h;
 				}
+				*/
 			}
 		}
 		break;
 	}
 }
 
-static int update_gap_geometry(swayc_t *container, struct wlc_geometry *g) {
+/* TODO WLR
+static int update_gap_geometry(swayc_t *container, struct wlr_geometry *g) {
 	swayc_t *ws = swayc_parent_by_type(container, C_WORKSPACE);
 	swayc_t *op = ws->parent;
 	int gap = container->is_floating ? 0 : swayc_gap(container);
@@ -742,8 +752,10 @@ static int update_gap_geometry(swayc_t *container, struct wlc_geometry *g) {
 
 	return gap;
 }
+*/
 
 void update_geometry(swayc_t *container) {
+	/* TODO WLR
 	if (container->type != C_VIEW && container->type != C_CONTAINER) {
 		return;
 	}
@@ -772,8 +784,9 @@ void update_geometry(swayc_t *container) {
 	}
 
 	swayc_t *output = swayc_parent_by_type(container, C_OUTPUT);
-	struct wlc_size size;
-	output_get_scaled_size(output->handle, &size);
+	struct wlr_box size;
+	wlr_output_effective_resolution(output->handle.output->wlr_output,
+			&size.width, &size.height);
 
 	if (swayc_is_fullscreen(container)) {
 		geometry.origin.x = 0;
@@ -781,7 +794,8 @@ void update_geometry(swayc_t *container) {
 		geometry.size.w = size.w;
 		geometry.size.h = size.h;
 		if (op->focused == workspace) {
-			wlc_view_bring_to_front(container->handle);
+			// TODO WLR
+			//wlc_view_bring_to_front(container->handle);
 		}
 
 		container->border_geometry = wlc_geometry_zero;
@@ -925,8 +939,10 @@ void update_geometry(swayc_t *container) {
 	}
 
 	if (container->type == C_VIEW) {
-		wlc_view_set_geometry(container->handle, 0, &geometry);
+		// TODO WLR
+		//wlc_view_set_geometry(container->handle, 0, &geometry);
 	}
+	*/
 }
 
 /**
@@ -977,9 +993,11 @@ static void arrange_windows_r(swayc_t *container, double width, double height) {
 		return;
 	case C_OUTPUT:
 		{
-			struct wlc_size resolution;
-			output_get_scaled_size(container->handle, &resolution);
-			width = resolution.w; height = resolution.h;
+			int _width, _height;
+			wlr_output_effective_resolution(
+					container->handle.output->wlr_output,
+					&_width, &_height);
+			width = _width, height = _height;
 			// output must have correct size due to e.g. seamless mouse,
 			// but a workspace might be smaller depending on panels.
 			container->width = width;
@@ -992,8 +1010,10 @@ static void arrange_windows_r(swayc_t *container, double width, double height) {
 		}
 		// Bring all unmanaged views to the front
 		for (i = 0; i < container->unmanaged->length; ++i) {
+			/* TODO WLR
 			wlc_handle *handle = container->unmanaged->items[i];
 			wlc_view_bring_to_front(*handle);
+			*/
 		}
 		return;
 	case C_WORKSPACE:
@@ -1028,7 +1048,8 @@ static void arrange_windows_r(swayc_t *container, double width, double height) {
 			y = container->y = y + gap;
 			width = container->width = width - gap * 2;
 			height = container->height = height - gap * 2;
-			sway_log(L_DEBUG, "Arranging workspace '%s' at %f, %f", container->name, container->x, container->y);
+			sway_log(L_DEBUG, "Arranging workspace '%s' at %f, %f",
+					container->name, container->x, container->y);
 		}
 		// children are properly handled below
 		break;
@@ -1037,8 +1058,9 @@ static void arrange_windows_r(swayc_t *container, double width, double height) {
 			container->width = width;
 			container->height = height;
 			update_geometry(container);
-			sway_log(L_DEBUG, "Set view to %.f x %.f @ %.f, %.f", container->width,
-					container->height, container->x, container->y);
+			sway_log(L_DEBUG, "Set view to %.f x %.f @ %.f, %.f",
+					container->width, container->height,
+					container->x, container->y);
 		}
 		return;
 	default:
@@ -1051,10 +1073,10 @@ static void arrange_windows_r(swayc_t *container, double width, double height) {
 		if (container->parent->type == C_WORKSPACE &&
 			(container->layout == L_TABBED || container->layout == L_STACKED)) {
 			update_geometry(container);
-			width = container->border_geometry.size.w;
-			height = container->border_geometry.size.h;
-			x = container->border_geometry.origin.x;
-			y = container->border_geometry.origin.y;
+			width = container->border_geometry.width;
+			height = container->border_geometry.height;
+			x = container->border_geometry.x;
+			y = container->border_geometry.y;
 		}
 
 		// update container size if it's a direct child in a tabbed/stacked layout
@@ -1063,16 +1085,16 @@ static void arrange_windows_r(swayc_t *container, double width, double height) {
 			container->parent->type != C_WORKSPACE) {
 			// Use parent actual_geometry as a base for calculating
 			// container geometry
-			container->width = container->parent->actual_geometry.size.w;
-			container->height = container->parent->actual_geometry.size.h;
-			container->x = container->parent->actual_geometry.origin.x;
-			container->y = container->parent->actual_geometry.origin.y;
+			container->width = container->parent->actual_geometry.width;
+			container->height = container->parent->actual_geometry.height;
+			container->x = container->parent->actual_geometry.x;
+			container->y = container->parent->actual_geometry.y;
 
 			update_geometry(container);
-			width = container->width = container->actual_geometry.size.w;
-			height = container->height = container->actual_geometry.size.h;
-			x = container->x = container->actual_geometry.origin.x;
-			y = container->y = container->actual_geometry.origin.y;
+			width = container->width = container->actual_geometry.width;
+			height = container->height = container->actual_geometry.height;
+			x = container->x = container->actual_geometry.x;
+			y = container->y = container->actual_geometry.y;
 		}
 
 		break;
@@ -1114,12 +1136,14 @@ static void arrange_windows_r(swayc_t *container, double width, double height) {
 				update_geometry(view);
 				sway_log(L_DEBUG, "Set floating view to %.f x %.f @ %.f, %.f",
 					 view->width, view->height, view->x, view->y);
+				/* TODO WLR
 				if (swayc_is_fullscreen(view)) {
 					wlc_view_bring_to_front(view->handle);
 				} else if (!container->focused ||
 						!swayc_is_fullscreen(container->focused)) {
 					wlc_view_bring_to_front(view->handle);
 				}
+				*/
 			}
 		}
 	}
@@ -1375,7 +1399,6 @@ void apply_auto_layout(swayc_t *container, const double x, const double y,
 }
 
 void arrange_windows(swayc_t *container, double width, double height) {
-	update_visibility(container);
 	arrange_windows_r(container, width, height);
 	layout_log(&root_container, 0);
 }
@@ -1462,6 +1485,7 @@ swayc_t *get_swayc_in_direction_under(swayc_t *container, enum movement_directio
 		}
 	}
 
+	/* TODO WLR
 	// If moving to an adjacent output we need a starting position (since this
 	// output might border to multiple outputs).
 	struct wlc_point abs_pos;
@@ -1564,12 +1588,14 @@ swayc_t *get_swayc_in_direction_under(swayc_t *container, enum movement_directio
 			}
 		}
 	}
+	*/
 }
 
 swayc_t *get_swayc_in_direction(swayc_t *container, enum movement_direction dir) {
 	return get_swayc_in_direction_under(container, dir, NULL);
 }
 
+/* TODO WLR
 void recursive_resize(swayc_t *container, double amount, enum wlc_resize_edge edge) {
 	int i;
 	bool layout_match = true;
@@ -1595,6 +1621,7 @@ void recursive_resize(swayc_t *container, double amount, enum wlc_resize_edge ed
 		}
 	}
 }
+*/
 
 enum swayc_layouts default_layout(swayc_t *output) {
 	if (config->default_layout != L_NONE) {

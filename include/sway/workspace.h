@@ -1,7 +1,5 @@
 #ifndef _SWAY_WORKSPACE_H
 #define _SWAY_WORKSPACE_H
-
-#include <wlc/wlc.h>
 #include <unistd.h>
 #include "list.h"
 #include "layout.h"

@@ -1,8 +1,6 @@
 #define _XOPEN_SOURCE 700
 #include <xkbcommon/xkbcommon.h>
 #include <xkbcommon/xkbcommon-names.h>
-#include <wlc/wlc.h>
-#include <wlc/wlc-render.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -23,7 +21,6 @@
 #include "sway/commands.h"
 #include "sway/container.h"
 #include "sway/output.h"
-#include "sway/handlers.h"
 #include "sway/input_state.h"
 #include "sway/criteria.h"
 #include "sway/ipc-server.h"
@@ -89,7 +86,8 @@ void hide_view_in_scratchpad(swayc_t *sp_view) {
 		return;
 	}
 
-	wlc_view_set_mask(sp_view->handle, 0);
+	// TODO WLR
+	//wlc_view_set_mask(sp_view->handle, 0);
 	sp_view->visible = false;
 	swayc_t *ws = sp_view->parent;
 	remove_child(sp_view);

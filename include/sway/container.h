@@ -1,7 +1,7 @@
 #ifndef _SWAY_CONTAINER_H
 #define _SWAY_CONTAINER_H
 #include <sys/types.h>
-#include <wlc/wlc.h>
+#include <wlr/types/wlr_box.h>
 #include <wlr/types/wlr_output.h>
 #include <stdint.h>
 #include "list.h"
@@ -65,13 +65,11 @@ enum swayc_border_types {
  * The tree is made of these. Views are containers that cannot have children.
  */
 struct sway_container {
-	// TODO WLR: reconcile these
-	wlc_handle handle;
-
+	// TODO WLR make this less shit
 	union {
 		struct sway_output *output;
 		struct sway_view *view;
-	} _handle;
+	} handle;
 
 	/**
 	 * A unique ID to identify this container. Primarily used in the
@@ -105,7 +103,7 @@ struct sway_container {
 	 * Cached geometry used to store view/container geometry when switching
 	 * between tabbed/stacked and horizontal/vertical layouts.
 	 */
-	struct wlc_geometry cached_geometry;
+	struct wlr_box cached_geometry;
 
 	/**
 	 * False if this view is invisible. It could be in the scratchpad or on a
@@ -155,9 +153,9 @@ struct sway_container {
 	 */
 	struct border *border;
 	enum swayc_border_types border_type;
-	struct wlc_geometry border_geometry;
-	struct wlc_geometry title_bar_geometry;
-	struct wlc_geometry actual_geometry;
+	struct wlr_box border_geometry;
+	struct wlr_box title_bar_geometry;
+	struct wlr_box actual_geometry;
 	int border_thickness;
 
 	/**
@@ -175,10 +173,6 @@ struct sway_container {
 	 */
 	list_t *marks;
 };
-
-enum visibility_mask {
-	VISIBLE = true
-} visible;
 
 struct sway_output;
 /**
@@ -206,7 +200,7 @@ swayc_t *new_view(swayc_t *sibling, struct sway_view *view);
 /**
  * Allocates a new floating view in the active workspace.
  */
-swayc_t *new_floating_view(wlc_handle handle);
+swayc_t *new_floating_view(struct sway_view *view);
 
 void floating_view_sane_size(swayc_t *view);
 
@@ -251,10 +245,6 @@ swayc_t *swayc_focus_by_type(swayc_t *container, enum swayc_types);
  */
 swayc_t *swayc_focus_by_layout(swayc_t *container, enum swayc_layouts);
 
-/**
- * Gets the swayc_t associated with a wlc_handle.
- */
-swayc_t *swayc_by_handle(wlc_handle handle);
 /**
  * Gets the named swayc_t.
  */
@@ -328,13 +318,6 @@ int swayc_gap(swayc_t *container);
 void container_map(swayc_t *, void (*f)(swayc_t *, void *), void *);
 
 /**
- * Set a view as visible or invisible.
- *
- * This will perform the required wlc calls as well; it is not sufficient to
- * simply toggle the boolean in swayc_t.
- */
-void set_view_visibility(swayc_t *view, void *data);
-/**
  * Set the gaps value for a view.
  */
 void set_gaps(swayc_t *view, void *amount);
@@ -342,11 +325,6 @@ void set_gaps(swayc_t *view, void *amount);
  * Add to the gaps value for a view.
  */
 void add_gaps(swayc_t *view, void *amount);
-
-/**
- * Issue wlc calls to make the visibility of a container consistent.
- */
-void update_visibility(swayc_t *container);
 
 /**
  * Close all child views of container

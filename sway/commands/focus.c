@@ -1,7 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include <string.h>
 #include <strings.h>
-#include <wlc/wlc.h>
 #include "sway/commands.h"
 #include "sway/container.h"
 #include "sway/focus.h"
@@ -14,6 +13,7 @@ struct cmd_results *cmd_focus(int argc, char **argv) {
 	struct cmd_results *error = NULL;
 	if (argc > 0 && strcasecmp(argv[0], "output") == 0) {
 		swayc_t *output = NULL;
+		/* TODO WLR
 		struct wlc_point abs_pos;
 		get_absolute_center_position(get_focused_container(&root_container), &abs_pos);
 		if ((error = checkarg(argc, "focus", EXPECTED_EQUAL_TO, 2))) {
@@ -30,6 +30,7 @@ struct cmd_results *cmd_focus(int argc, char **argv) {
 				center_pointer_on(focused);
 			}
 		}
+		*/
 		return cmd_results_new(CMD_SUCCESS, NULL, NULL);
 	} else if (argc == 0) {
 		set_focused_container(current_container);

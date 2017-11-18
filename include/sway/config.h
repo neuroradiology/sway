@@ -1,12 +1,8 @@
 #ifndef _SWAY_CONFIG_H
 #define _SWAY_CONFIG_H
-
 #define PID_WORKSPACE_TIMEOUT 60
-
 #include <libinput.h>
 #include <stdint.h>
-#include <wlc/geometry.h>
-#include <wlc/wlc.h>
 #include <xkbcommon/xkbcommon.h>
 #include <time.h>
 #include "wayland-desktop-shell-server-protocol.h"
@@ -69,7 +65,8 @@ struct input_config {
 	int tap;
 
 	bool capturable;
-	struct wlc_geometry region;
+	// TODO WLR
+	//struct wlc_geometry region;
 };
 
 /**
@@ -362,8 +359,6 @@ void free_input_config(struct input_config *ic);
 
 int output_name_cmp(const void *item, const void *data);
 void merge_output_config(struct output_config *dst, struct output_config *src);
-/** Sets up a WLC output handle based on a given output_config.
- */
 void apply_output_config(struct output_config *oc, swayc_t *output);
 void free_output_config(struct output_config *oc);
 

@@ -1,5 +1,4 @@
 #include "stdbool.h"
-#include <wlc/wlc.h>
 #include "sway/focus.h"
 #include "sway/workspace.h"
 #include "sway/layout.h"
@@ -29,7 +28,8 @@ static void update_focus(swayc_t *c) {
 
 		// Case where output changes
 		case C_OUTPUT:
-			wlc_output_focus(c->handle);
+			// TODO WLR
+			//wlc_output_focus(c->handle);
 			break;
 
 		// Case where workspace changes
@@ -42,11 +42,11 @@ static void update_focus(swayc_t *c) {
 					destroy_workspace(prev);
 				} else {
 					// update visibility of old workspace
-					update_visibility(prev);
+					// TODO WLR
 				}
 			}
 			// Update visibility of newly focused workspace
-			update_visibility(c);
+			// TODO WLR
 			break;
 
 		default:
@@ -152,6 +152,7 @@ bool set_focused_container(swayc_t *c) {
 		old_ws = NULL;
 	}
 
+	/* TODO WLR
 	if (!(wlc_view_get_type(p->handle) & WLC_BIT_POPUP)) {
 		if (old_focus) {
 			if (old_focus->type == C_VIEW) {
@@ -162,14 +163,12 @@ bool set_focused_container(swayc_t *c) {
 		if (c->type == C_VIEW) {
 			wlc_view_set_state(c->handle, WLC_BIT_ACTIVATED, true);
 		}
-		/* TODO WLR
 		if (!desktop_shell.is_locked) {
 			// If the system is locked, we do everything _but_ actually setting
 			// focus. This includes making our internals think that this view is
 			// focused.
 			wlc_view_focus(c->handle);
 		}
-		*/
 		if (c->parent->layout != L_TABBED && c->parent->layout != L_STACKED) {
 			update_container_border(c);
 		}
@@ -180,6 +179,7 @@ bool set_focused_container(swayc_t *c) {
 			arrange_windows(parent, -1, -1);
 		}
 	}
+	*/
 
 	if (old_ws != workspace) {
 		// old_ws might be NULL here but that's ok

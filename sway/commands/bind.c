@@ -1,6 +1,7 @@
 #include <xkbcommon/xkbcommon.h>
 #include <xkbcommon/xkbcommon-names.h>
 #include <strings.h>
+#include <string.h>
 #include "sway/commands.h"
 #include "sway/config.h"
 #include "sway/input_state.h"

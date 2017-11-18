@@ -20,7 +20,7 @@ static json_object *ipc_json_create_rect(swayc_t *c) {
 
 	struct wlr_box box;
 	if (c->type == C_OUTPUT) {
-		wlr_output_effective_resolution(c->_handle.output->wlr_output,
+		wlr_output_effective_resolution(c->handle.output->wlr_output,
 				&box.width, &box.height);
 	} else {
 		box.width = c->width;
@@ -35,13 +35,13 @@ static json_object *ipc_json_create_rect(swayc_t *c) {
 	return rect;
 }
 
-static json_object *ipc_json_create_rect_from_geometry(struct wlc_geometry g) {
+static json_object *ipc_json_create_rect_from_box(struct wlr_box *b) {
 	json_object *rect = json_object_new_object();
 
-	json_object_object_add(rect, "x", json_object_new_int(g.origin.x));
-	json_object_object_add(rect, "y", json_object_new_int(g.origin.y));
-	json_object_object_add(rect, "width", json_object_new_int(g.size.w));
-	json_object_object_add(rect, "height", json_object_new_int(g.size.h));
+	json_object_object_add(rect, "x", json_object_new_int(b->x));
+	json_object_object_add(rect, "y", json_object_new_int(b->y));
+	json_object_object_add(rect, "width", json_object_new_int(b->width));
+	json_object_object_add(rect, "height", json_object_new_int(b->height));
 
 	return rect;
 }
@@ -129,7 +129,7 @@ static float ipc_json_child_percentage(swayc_t *c) {
 }
 
 static void ipc_json_describe_output(swayc_t *output, json_object *object) {
-	uint32_t scale = wlc_output_get_scale(output->handle);
+	uint32_t scale = output->handle.output->wlr_output->scale;
 	json_object_object_add(object, "active", json_object_new_boolean(true));
 	json_object_object_add(object, "primary", json_object_new_boolean(false));
 	json_object_object_add(object, "layout", json_object_new_string("output"));
@@ -164,7 +164,8 @@ static void ipc_json_describe_view(swayc_t *c, json_object *object) {
 	json_object *props = json_object_new_object();
 	json_object_object_add(object, "type", json_object_new_string((c->is_floating) ? "floating_con" : "con"));
 
-	wlc_handle parent = wlc_view_get_parent(c->handle);
+	// TODO WLR
+	//wlc_handle parent = wlc_view_get_parent(c->handle);
 	json_object_object_add(object, "scratchpad_state",
 		json_object_new_string(ipc_json_get_scratchpad_state(c)));
 
@@ -175,7 +176,7 @@ static void ipc_json_describe_view(swayc_t *c, json_object *object) {
 	json_object_object_add(props, "instance", c->instance ? json_object_new_string(c->instance) :
 		c->app_id ? json_object_new_string(c->app_id) : NULL);
 	json_object_object_add(props, "title", (c->name) ? json_object_new_string(c->name) : NULL);
-	json_object_object_add(props, "transient_for", parent ? json_object_new_int(parent) : NULL);
+	//json_object_object_add(props, "transient_for", parent ? json_object_new_int(parent) : NULL);
 	json_object_object_add(object, "window_properties", props);
 
 	json_object_object_add(object, "fullscreen_mode",
@@ -186,6 +187,7 @@ static void ipc_json_describe_view(swayc_t *c, json_object *object) {
 
 	json_object_object_add(object, "app_id", c->app_id ? json_object_new_string(c->app_id) : NULL);
 
+	/*
 	if (c->parent) {
 		const char *layout = (c->parent->type == C_CONTAINER) ?
 			ipc_json_layout_description(c->parent->layout) : "none";
@@ -198,6 +200,7 @@ static void ipc_json_describe_view(swayc_t *c, json_object *object) {
 		json_object_object_add(object, "workspace_layout",
 			json_object_new_string(ipc_json_layout_description(swayc_parent_by_type(c, C_WORKSPACE)->workspace_layout)));
 	}
+	*/
 }
 
 static void ipc_json_describe_root(swayc_t *c, json_object *object) {
@@ -221,11 +224,11 @@ json_object *ipc_json_describe_container(swayc_t *c) {
 	json_object_object_add(object, "focused", json_object_new_boolean(c == current_focus));
 
 	json_object_object_add(object, "border", json_object_new_string(ipc_json_border_description(c)));
-	json_object_object_add(object, "window_rect", ipc_json_create_rect_from_geometry(c->actual_geometry));
-	json_object_object_add(object, "deco_rect", ipc_json_create_rect_from_geometry(c->title_bar_geometry));
-	json_object_object_add(object, "geometry", ipc_json_create_rect_from_geometry(c->cached_geometry));
+	json_object_object_add(object, "window_rect", ipc_json_create_rect_from_box(&c->actual_geometry));
+	json_object_object_add(object, "deco_rect", ipc_json_create_rect_from_box(&c->title_bar_geometry));
+	json_object_object_add(object, "geometry", ipc_json_create_rect_from_box(&c->cached_geometry));
 	json_object_object_add(object, "percent", (percent > 0) ? json_object_new_double(percent) : NULL);
-	json_object_object_add(object, "window", json_object_new_int(c->handle)); // for the sake of i3 compat
+	json_object_object_add(object, "window", json_object_new_int(c->id)); // for the sake of i3 compat
 	// TODO: make urgency actually work once Sway supports it
 	json_object_object_add(object, "urgent", json_object_new_boolean(false));
 	json_object_object_add(object, "current_border_width", json_object_new_int(c->border_thickness));

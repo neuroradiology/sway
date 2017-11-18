@@ -14,6 +14,7 @@
 #include <limits.h>
 #include <float.h>
 #include <dirent.h>
+#include <string.h>
 #include <strings.h>
 #include <wlr/types/wlr_output.h>
 #include "wayland-desktop-shell-server-protocol.h"
@@ -1276,6 +1277,7 @@ int sway_binding_cmp_keys(const void *a, const void *b) {
 	} else if (binda->modifiers < bindb->modifiers) {
 		return -1;
 	}
+	/* TODO WLR
 	struct wlc_modifiers no_mods = { 0, 0 };
 	for (int i = 0; i < binda->keys->length; i++) {
 		xkb_keysym_t ka = *(xkb_keysym_t *)binda->keys->items[i],
@@ -1296,6 +1298,7 @@ int sway_binding_cmp_keys(const void *a, const void *b) {
 			return -1;
 		}
 	}
+	*/
 
 	return 0;
 }
@@ -1390,7 +1393,8 @@ struct bar_config *default_bar_config(void) {
 	}
 	if (!(bar->mode = strdup("dock"))) goto cleanup;
 	if (!(bar->hidden_state = strdup("hide"))) goto cleanup;
-	bar->modifier = WLC_BIT_MOD_LOGO;
+	// TODO WLR
+	//bar->modifier = WLC_BIT_MOD_LOGO;
 	bar->outputs = NULL;
 	bar->position = DESKTOP_SHELL_PANEL_POSITION_BOTTOM;
 	if (!(bar->bindings = create_list())) goto cleanup;

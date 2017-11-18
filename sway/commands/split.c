@@ -49,7 +49,8 @@ static struct cmd_results *_do_split(int argc, char **argv, int layout) {
 	// schedule render to make changes take effect right away,
 	// otherwise we would have to wait for the view to render,
 	// which is unpredictable.
-	wlc_output_schedule_render(output->handle);
+	// TODO WLR
+	//wlc_output_schedule_render(output->handle);
 
 	return cmd_results_new(CMD_SUCCESS, NULL, NULL);
 }
