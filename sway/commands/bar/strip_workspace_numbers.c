@@ -2,26 +2,30 @@
 #include <strings.h>
 #include "sway/commands.h"
 #include "log.h"
+#include "util.h"
 
 struct cmd_results *bar_cmd_strip_workspace_numbers(int argc, char **argv) {
 	struct cmd_results *error = NULL;
-	if ((error = checkarg(argc, "strip_workspace_numbers", EXPECTED_EQUAL_TO, 1))) {
+	if ((error = checkarg(argc,
+				"strip_workspace_numbers", EXPECTED_EQUAL_TO, 1))) {
 		return error;
 	}
-
 	if (!config->current_bar) {
-		return cmd_results_new(CMD_FAILURE, "strip_workspace_numbers", "No bar defined.");
+		return cmd_results_new(CMD_FAILURE, "No bar defined.");
+	}
+	
+	config->current_bar->strip_workspace_numbers =
+		parse_boolean(argv[0], config->current_bar->strip_workspace_numbers);
+
+	if (config->current_bar->strip_workspace_numbers) {
+		config->current_bar->strip_workspace_name = false;
+
+		sway_log(SWAY_DEBUG, "Stripping workspace numbers on bar: %s",
+				config->current_bar->id);
+	} else {
+		sway_log(SWAY_DEBUG, "Enabling workspace numbers on bar: %s",
+				config->current_bar->id);
 	}
 
-	if (strcasecmp("yes", argv[0]) == 0) {
-		config->current_bar->strip_workspace_numbers = true;
-		sway_log(L_DEBUG, "Stripping workspace numbers on bar: %s", config->current_bar->id);
-	} else if (strcasecmp("no", argv[0]) == 0) {
-		config->current_bar->strip_workspace_numbers = false;
-		sway_log(L_DEBUG, "Enabling workspace numbers on bar: %s", config->current_bar->id);
-	} else {
-		error = cmd_results_new(CMD_INVALID, "strip_workspace_numbers", "Invalid value %s", argv[0]);
-		return error;
-	}
-	return cmd_results_new(CMD_SUCCESS, NULL, NULL);
+	return cmd_results_new(CMD_SUCCESS, NULL);
 }

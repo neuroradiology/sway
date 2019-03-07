@@ -1,14 +1,10 @@
-# sway [![](https://api.travis-ci.org/swaywm/sway.svg)](https://travis-ci.org/swaywm/sway) [![Пожертвовать через fosspay](https://drewdevault.com/donate/static/donate-with-fosspay.png)](https://drewdevault.com/donate?project=4)
+# sway
 
-"**S**irCmpwn's **Way**land compositor" на данный момент **(в разработке)**
-i3-совместимый [Wayland](http://wayland.freedesktop.org/) композитор.
-Прочитайте [FAQ](https://github.com/swaywm/sway/wiki). Присоединяйтесь к
-[IRC каналу](http://webchat.freenode.net/?channels=sway&uio=d4) (#sway на
+Sway на данный момент **(в разработке)** i3-совместимый
+[Wayland](http://wayland.freedesktop.org/) композитор.  Прочитайте
+[FAQ](https://github.com/swaywm/sway/wiki). Присоединяйтесь к [IRC
+каналу](http://webchat.freenode.net/?channels=sway&uio=d4) (#sway на
 irc.freenode.net).
-
-**Внимание**: на данный момент ведется активная интеграция wlroots, в связи с чем разработка sway приостановлена, однако патчи продолжают приниматься.
-
-**2018-02-18**: мы запустили сбор средств на хакатон по интеграции wlroots! Пожалуйста, [поддержите нас!](https://www.indiegogo.com/projects/sway-hackathon-software/x/1059863)
 
 [![](https://sr.ht/ICd5.png)](https://sr.ht/ICd5.png)
 
@@ -21,20 +17,12 @@ irc.freenode.net).
 ## Помощь
 
 DarkReef оказывает поддержку на русском языке в IRC канале и на GitHub в часовом поясе UTC +05:00.
-Если у вас есть желание помочь с переводом на русский языке, то, пожалуйста, ознакомьтесь с [подсказками для переводчиков](https://github.com/swaywm/sway/issues/1318). На этой же странице можно узнать [статус перевода](https://github.com/swaywm/sway/issues/1318#issuecomment-326913020).
+Если у вас есть желание помочь с переводом на русский язык, то, пожалуйста, ознакомьтесь с [подсказками для переводчиков](https://github.com/swaywm/sway/issues/1318). На этой же странице можно узнать [статус перевода](https://github.com/swaywm/sway/issues/1318#issuecomment-326913020).
 
 ## Подпись версий
 
 Версии подписаны ключом [B22DA89A](http://pgp.mit.edu/pks/lookup?op=vindex&search=0x52CB6609B22DA89A)
 и опубликованы [на GitHub'е](https://github.com/swaywm/sway/releases).
-
-## Статус
-
-- [Поддержка i3](https://github.com/swaywm/sway/issues/2)
-- [Поддержка i3-bar](https://github.com/swaywm/sway/issues/343)
-- [Поддержка i3-gaps](https://github.com/swaywm/sway/issues/307)
-- [Поддержка IPC](https://github.com/swaywm/sway/issues/98)
-- [Безопасность](https://github.com/swaywm/sway/issues/984)
 
 ## Установка
 
@@ -51,36 +39,30 @@ Sway доступен во многих дистрибутивах и наход
 
 Установите следующие пакеты:
 
-* cmake
+* meson
 * [wlc](https://github.com/Cloudef/wlc)
 * wayland
 * xwayland
 * libinput >= 1.6.0
 * libcap
-* asciidoc
 * pcre
-* json-c <= 0.12.1
+* json-c >= 0.13
 * pango
 * cairo
 * gdk-pixbuf2 *
-* pam **
-* dbus >= 1.10 ***
-* imagemagick (требуется для захвата изображений через swaygrab)
-* ffmpeg (требуется для захвата видео через swaygrab)
+* dbus >= 1.10 **
+* [scdoc](https://git.sr.ht/~sircmpwn/scdoc) (required for man pages)
+* git
 
-_\*Требуется только для swaybar, swaybg и swaylock_
+_\*Требуется только для swaybar, swaybg_
 
-_\*\*Требуется только для swaylock_
-
-_\*\*\*Требуется только для tray_
+_\*\*Требуется только для tray_
 
 Выполните следующие команды:
 
-	mkdir build
-    cd build
-    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_SYSCONFDIR=/etc ..
-    make
-    sudo make install
+    meson build
+    ninja -C build
+    sudo ninja -C build install
 
 Если у вас logind:
 

@@ -1,4 +1,4 @@
-#define _XOPEN_SOURCE 700
+#define _POSIX_C_SOURCE 200809L
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -9,24 +9,17 @@
 #include "string.h"
 #include "list.h"
 
-const char whitespace[] = " \f\n\r\t\v";
+static const char whitespace[] = " \f\n\r\t\v";
 
-char *strip_whitespace(char *_str) {
-	if (*_str == '\0')
-		return _str;
-	char *strold = _str;
-	while (*_str == ' ' || *_str == '\t') {
-		_str++;
+void strip_whitespace(char *str) {
+	size_t len = strlen(str);
+	size_t start = strspn(str, whitespace);
+	memmove(str, &str[start], len + 1 - start);
+
+	if (*str) {
+		for (len -= start + 1; isspace(str[len]); --len) {}
+		str[len + 1] = '\0';
 	}
-	char *str = strdup(_str);
-	free(strold);
-	int i;
-	for (i = 0; str[i] != '\0'; ++i);
-	do {
-		i--;
-	} while (i >= 0 && (str[i] == ' ' || str[i] == '\t'));
-	str[i + 1] = '\0';
-	return str;
 }
 
 void strip_quotes(char *str) {
@@ -55,6 +48,20 @@ void strip_quotes(char *str) {
 	*end = '\0';
 }
 
+char *lenient_strcat(char *dest, const char *src) {
+	if (dest && src) {
+		return strcat(dest, src);
+	}
+	return dest;
+}
+
+char *lenient_strncat(char *dest, const char *src, size_t len) {
+	if (dest && src) {
+		return strncat(dest, src, len);
+	}
+	return dest;
+}
+
 // strcmp that also handles null pointers.
 int lenient_strcmp(char *a, char *b) {
 	if (a == b) {
@@ -81,14 +88,6 @@ list_t *split_string(const char *str, const char *delims) {
 	}
 	free(copy);
 	return res;
-}
-
-void free_flat_list(list_t *list) {
-	int i;
-	for (i = 0; i < list->length; ++i) {
-		free(list->items[i]);
-	}
-	list_free(list);
 }
 
 char **split_args(const char *start, int *argc) {
@@ -259,6 +258,9 @@ int unescape_string(char *string) {
 }
 
 char *join_args(char **argv, int argc) {
+	if (!sway_assert(argc > 0, "argc should be positive")) {
+		return NULL;
+	}
 	int len = 0, i;
 	for (i = 0; i < argc; ++i) {
 		len += strlen(argv[i]) + 1;
@@ -386,4 +388,18 @@ char *argsep(char **stringp, const char *delim) {
 	}
 	found:
 	return start;
+}
+
+const char *strcasestr(const char *haystack, const char *needle) {
+	size_t needle_len = strlen(needle);
+	const char *pos = haystack;
+	const char *end = pos + strlen(haystack) - needle_len;
+
+	while (pos <= end) {
+		if (strncasecmp(pos, needle, needle_len) == 0) {
+			return pos;
+		}
+		++pos;
+	}
+	return NULL;
 }

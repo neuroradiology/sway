@@ -1,4 +1,4 @@
-#define _XOPEN_SOURCE 500
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,30 +9,55 @@
 #include <sys/socket.h>
 #include <ctype.h>
 #include <unistd.h>
-#include <json-c/json.h>
+#include <json.h>
 #include "stringop.h"
 #include "ipc-client.h"
-#include "readline.h"
 #include "log.h"
 
 void sway_terminate(int exit_code) {
 	exit(exit_code);
 }
 
-static bool success(json_object *r, bool fallback) {
+static bool success_object(json_object *result) {
 	json_object *success;
-	if (!json_object_object_get_ex(r, "success", &success)) {
-		return fallback;
-	} else {
-		return json_object_get_boolean(success);
+
+	if (!json_object_object_get_ex(result, "success", &success)) {
+		return true;
 	}
+
+	return json_object_get_boolean(success);
+}
+
+// Iterate results array and return false if any of them failed
+static bool success(json_object *r, bool fallback) {
+	if (!json_object_is_type(r, json_type_array)) {
+		if (json_object_is_type(r, json_type_object)) {
+			return success_object(r);
+		}
+		return fallback;
+	}
+
+	size_t results_len = json_object_array_length(r);
+	if (!results_len) {
+		return fallback;
+	}
+
+	for (size_t i = 0; i < results_len; ++i) {
+		json_object *result = json_object_array_get_idx(r, i);
+
+		if (!success_object(result)) {
+			return false;
+		}
+	}
+
+	return true;
 }
 
 static void pretty_print_cmd(json_object *r) {
-	if (!success(r, true)) {
+	if (!success_object(r)) {
 		json_object *error;
 		if (!json_object_object_get_ex(r, "error", &error)) {
-			printf("An unknkown error occured");
+			printf("An unknkown error occurred");
 		} else {
 			printf("Error: %s\n", json_object_get_string(error));
 		}
@@ -40,104 +65,189 @@ static void pretty_print_cmd(json_object *r) {
 }
 
 static void pretty_print_workspace(json_object *w) {
-	json_object *name, *rect, *visible, *output, *urgent, *layout, *focused;
+	json_object *name, *rect, *visible, *output, *urgent, *layout,
+				*representation, *focused;
 	json_object_object_get_ex(w, "name", &name);
 	json_object_object_get_ex(w, "rect", &rect);
 	json_object_object_get_ex(w, "visible", &visible);
 	json_object_object_get_ex(w, "output", &output);
 	json_object_object_get_ex(w, "urgent", &urgent);
 	json_object_object_get_ex(w, "layout", &layout);
+	json_object_object_get_ex(w, "representation", &representation);
 	json_object_object_get_ex(w, "focused", &focused);
 	printf(
 		"Workspace %s%s%s%s\n"
 		"  Output: %s\n"
-		"  Layout: %s\n\n",
+		"  Layout: %s\n"
+		"  Representation: %s\n\n",
 		json_object_get_string(name),
 		json_object_get_boolean(focused) ? " (focused)" : "",
 		!json_object_get_boolean(visible) ? " (off-screen)" : "",
 		json_object_get_boolean(urgent) ? " (urgent)" : "",
 		json_object_get_string(output),
-		json_object_get_string(layout)
+		json_object_get_string(layout),
+		json_object_get_string(representation)
 	);
 }
 
-static void pretty_print_input(json_object *i) {
-	json_object *id, *name, *size, *caps;
-	json_object_object_get_ex(i, "identifier", &id);
-	json_object_object_get_ex(i, "name", &name);
-	json_object_object_get_ex(i, "size", &size);
-	json_object_object_get_ex(i, "capabilities", &caps);
-
-	printf( "Input device %s\n  Type: ", json_object_get_string(name));
-
+static const char *pretty_type_name(const char *name) {
+	// TODO these constants probably belong in the common lib
 	struct {
 		const char *a;
 		const char *b;
-	} cap_names[] = {
+	} type_names[] = {
 		{ "keyboard", "Keyboard" },
 		{ "pointer", "Mouse" },
-		{ "touch", "Touch" },
-		{ "tablet_tool", "Tablet tool" },
 		{ "tablet_pad", "Tablet pad" },
-		{ "gesture", "Gesture" },
-		{ "switch", "Switch" },
+		{ "tablet_tool", "Tablet tool" },
+		{ "touch", "Touch" },
 	};
 
-	size_t len = json_object_array_length(caps);
-	if (len == 0) {
-		printf("Unknown");
+	for (size_t i = 0; i < sizeof(type_names) / sizeof(type_names[0]); ++i) {
+		if (strcmp(type_names[i].a, name) == 0) {
+			return type_names[i].b;
+		}
 	}
 
-	json_object *cap;
-	for (size_t i = 0; i < len; ++i) {
-		cap = json_object_array_get_idx(caps, i);
-		const char *cap_s = json_object_get_string(cap);
-		const char *_name = NULL;
-		for (size_t j = 0; j < sizeof(cap_names) / sizeof(cap_names[0]); ++i) {
-			if (strcmp(cap_names[i].a, cap_s) == 0) {
-				_name = cap_names[i].b;
-				break;
-			}
+	return name;
+}
+
+static void pretty_print_input(json_object *i) {
+	json_object *id, *name, *type, *product, *vendor, *kbdlayout, *events;
+	json_object_object_get_ex(i, "identifier", &id);
+	json_object_object_get_ex(i, "name", &name);
+	json_object_object_get_ex(i, "type", &type);
+	json_object_object_get_ex(i, "product", &product);
+	json_object_object_get_ex(i, "vendor", &vendor);
+
+	const char *fmt =
+		"Input device: %s\n"
+		"  Type: %s\n"
+		"  Identifier: %s\n"
+		"  Product ID: %d\n"
+		"  Vendor ID: %d\n";
+
+
+	printf(fmt, json_object_get_string(name),
+		pretty_type_name(json_object_get_string(type)),
+		json_object_get_string(id),
+		json_object_get_int(product),
+		json_object_get_int(vendor));
+
+	if (json_object_object_get_ex(i, "xkb_active_layout_name", &kbdlayout)) {
+		const char *layout = json_object_get_string(kbdlayout);
+		printf("  Active Keyboard Layout: %s\n", layout ? layout : "(unnamed)");
+	}
+
+	if (json_object_object_get_ex(i, "libinput_send_events", &events)) {
+		printf("  Libinput Send Events: %s\n", json_object_get_string(events));
+	}
+
+	printf("\n");
+}
+
+static void pretty_print_seat(json_object *i) {
+	json_object *name, *capabilities, *devices;
+	json_object_object_get_ex(i, "name", &name);
+	json_object_object_get_ex(i, "capabilities", &capabilities);
+	json_object_object_get_ex(i, "devices", &devices);
+
+	const char *fmt =
+		"Seat: %s\n"
+		"  Capabilities: %d\n";
+
+	printf(fmt, json_object_get_string(name),
+		json_object_get_int(capabilities));
+
+	size_t devices_len = json_object_array_length(devices);
+	if (devices_len > 0) {
+		printf("  Devices:\n");
+		for (size_t i = 0; i < devices_len; ++i) {
+			json_object *device = json_object_array_get_idx(devices, i);
+
+			json_object *device_name;
+			json_object_object_get_ex(device, "name", &device_name);
+
+			printf("    %s\n", json_object_get_string(device_name));
 		}
-		printf("%s%s", _name ? _name : cap_s, len > 1 && i != len - 1 ? ", " : "");
 	}
-	printf("\n  Sway ID: %s\n", json_object_get_string(id));
-	if (size) {
-		json_object *width, *height;
-		json_object_object_get_ex(size, "width", &width);
-		json_object_object_get_ex(size, "height", &height);
-		printf("  Size: %lfmm x %lfmm\n",
-				json_object_get_double(width), json_object_get_double(height));
-	}
+
 	printf("\n");
 }
 
 static void pretty_print_output(json_object *o) {
-	json_object *name, *rect, *focused, *active, *ws, *scale;
+	json_object *name, *rect, *focused, *active, *ws, *current_mode;
 	json_object_object_get_ex(o, "name", &name);
 	json_object_object_get_ex(o, "rect", &rect);
 	json_object_object_get_ex(o, "focused", &focused);
 	json_object_object_get_ex(o, "active", &active);
 	json_object_object_get_ex(o, "current_workspace", &ws);
+	json_object *make, *model, *serial, *scale, *transform;
+	json_object_object_get_ex(o, "make", &make);
+	json_object_object_get_ex(o, "model", &model);
+	json_object_object_get_ex(o, "serial", &serial);
 	json_object_object_get_ex(o, "scale", &scale);
-	json_object *x, *y, *width, *height;
+	json_object_object_get_ex(o, "transform", &transform);
+	json_object *x, *y;
 	json_object_object_get_ex(rect, "x", &x);
 	json_object_object_get_ex(rect, "y", &y);
-	json_object_object_get_ex(rect, "width", &width);
-	json_object_object_get_ex(rect, "height", &height);
-	printf(
-		"Output %s%s%s\n"
-		"  Geometry: %dx%d @ %d,%d\n"
-		"  Scale factor: %dx\n"
-		"  Workspace: %s\n\n",
-		json_object_get_string(name),
-		json_object_get_boolean(focused) ? " (focused)" : "",
-		!json_object_get_boolean(active) ? " (inactive)" : "",
-		json_object_get_int(width), json_object_get_int(height),
-		json_object_get_int(x), json_object_get_int(y),
-		json_object_get_int(scale),
-		json_object_get_string(ws)
-	);
+	json_object *modes;
+	json_object_object_get_ex(o, "modes", &modes);
+	json_object *width, *height, *refresh;
+	json_object_object_get_ex(o, "current_mode", &current_mode);
+	json_object_object_get_ex(current_mode, "width", &width);
+	json_object_object_get_ex(current_mode, "height", &height);
+	json_object_object_get_ex(current_mode, "refresh", &refresh);
+
+	if (json_object_get_boolean(active)) {
+		printf(
+			"Output %s '%s %s %s'%s\n"
+			"  Current mode: %dx%d @ %f Hz\n"
+			"  Position: %d,%d\n"
+			"  Scale factor: %f\n"
+			"  Transform: %s\n"
+			"  Workspace: %s\n",
+			json_object_get_string(name),
+			json_object_get_string(make),
+			json_object_get_string(model),
+			json_object_get_string(serial),
+			json_object_get_boolean(focused) ? " (focused)" : "",
+			json_object_get_int(width),
+			json_object_get_int(height),
+			(float)json_object_get_int(refresh) / 1000,
+			json_object_get_int(x), json_object_get_int(y),
+			json_object_get_double(scale),
+			json_object_get_string(transform),
+			json_object_get_string(ws)
+		);
+	} else {
+		printf(
+			"Output %s '%s %s %s' (inactive)",
+			json_object_get_string(name),
+			json_object_get_string(make),
+			json_object_get_string(model),
+			json_object_get_string(serial)
+		);
+	}
+
+	size_t modes_len = json_object_array_length(modes);
+	if (modes_len > 0) {
+		printf("  Available modes:\n");
+		for (size_t i = 0; i < modes_len; ++i) {
+			json_object *mode = json_object_array_get_idx(modes, i);
+
+			json_object *mode_width, *mode_height, *mode_refresh;
+			json_object_object_get_ex(mode, "width", &mode_width);
+			json_object_object_get_ex(mode, "height", &mode_height);
+			json_object_object_get_ex(mode, "refresh", &mode_refresh);
+
+			printf("    %dx%d @ %f Hz\n", json_object_get_int(mode_width),
+				json_object_get_int(mode_height),
+				(float)json_object_get_int(mode_refresh) / 1000);
+		}
+	}
+
+	printf("\n");
 }
 
 static void pretty_print_version(json_object *v) {
@@ -146,45 +256,23 @@ static void pretty_print_version(json_object *v) {
 	printf("sway version %s\n", json_object_get_string(ver));
 }
 
-static void pretty_print_clipboard(json_object *v) {
-	if (success(v, true)) {
-		if (json_object_is_type(v, json_type_array)) {
-			for (int i = 0; i < json_object_array_length(v); ++i) {
-				json_object *o = json_object_array_get_idx(v, i);
-				printf("%s\n", json_object_get_string(o));
-			}
-		} else {
-			// NOTE: could be extended to print all received types
-			// instead just the first one when sways ipc server
-			// supports it
-			struct json_object_iterator iter = json_object_iter_begin(v);
-			struct json_object_iterator end = json_object_iter_end(v);
-			if (!json_object_iter_equal(&iter, &end)) {
-				json_object *obj = json_object_iter_peek_value(&iter);
-				if (success(obj, false)) {
-					json_object *content;
-					json_object_object_get_ex(obj, "content", &content);
-					printf("%s\n", json_object_get_string(content));
-				} else {
-					json_object *error;
-					json_object_object_get_ex(obj, "error", &error);
-					printf("Error: %s\n", json_object_get_string(error));
-				}
-			}
-		}
-	} else {
-		json_object *error;
-		json_object_object_get_ex(v, "error", &error);
-		printf("Error: %s\n", json_object_get_string(error));
-	}
+static void pretty_print_config(json_object *c) {
+	json_object *config;
+	json_object_object_get_ex(c, "config", &config);
+	printf("%s\n", json_object_get_string(config));
 }
 
 static void pretty_print(int type, json_object *resp) {
 	if (type != IPC_COMMAND && type != IPC_GET_WORKSPACES &&
 			type != IPC_GET_INPUTS && type != IPC_GET_OUTPUTS &&
-			type != IPC_GET_VERSION && type != IPC_GET_CLIPBOARD) {
+			type != IPC_GET_VERSION && type != IPC_GET_SEATS &&
+			type != IPC_GET_CONFIG && type != IPC_SEND_TICK) {
 		printf("%s\n", json_object_to_json_string_ext(resp,
 			JSON_C_TO_STRING_PRETTY | JSON_C_TO_STRING_SPACED));
+		return;
+	}
+
+	if (type == IPC_SEND_TICK) {
 		return;
 	}
 
@@ -193,8 +281,8 @@ static void pretty_print(int type, json_object *resp) {
 		return;
 	}
 
-	if (type == IPC_GET_CLIPBOARD) {
-		pretty_print_clipboard(resp);
+	if (type == IPC_GET_CONFIG) {
+		pretty_print_config(resp);
 		return;
 	}
 
@@ -215,20 +303,25 @@ static void pretty_print(int type, json_object *resp) {
 		case IPC_GET_OUTPUTS:
 			pretty_print_output(obj);
 			break;
+		case IPC_GET_SEATS:
+			pretty_print_seat(obj);
+			break;
 		}
 	}
 }
 
 int main(int argc, char **argv) {
-	static int quiet = 0;
-	static int raw = 0;
+	static bool quiet = false;
+	static bool raw = false;
+	static bool monitor = false;
 	char *socket_path = NULL;
 	char *cmdtype = NULL;
 
-	init_log(L_INFO);
+	sway_log_init(SWAY_INFO, NULL);
 
 	static struct option long_options[] = {
 		{"help", no_argument, NULL, 'h'},
+		{"monitor", no_argument, NULL, 'm'},
 		{"quiet", no_argument, NULL, 'q'},
 		{"raw", no_argument, NULL, 'r'},
 		{"socket", required_argument, NULL, 's'},
@@ -241,6 +334,7 @@ int main(int argc, char **argv) {
 		"Usage: swaymsg [options] [message]\n"
 		"\n"
 		"  -h, --help             Show help message and quit.\n"
+		"  -m, --monitor          Monitor until killed (-t SUBSCRIBE only)\n"
 		"  -q, --quiet            Be quiet.\n"
 		"  -r, --raw              Use raw output even if using a tty\n"
 		"  -s, --socket <socket>  Use the specified socket.\n"
@@ -252,16 +346,19 @@ int main(int argc, char **argv) {
 	int c;
 	while (1) {
 		int option_index = 0;
-		c = getopt_long(argc, argv, "hqrs:t:v", long_options, &option_index);
+		c = getopt_long(argc, argv, "hmqrs:t:v", long_options, &option_index);
 		if (c == -1) {
 			break;
 		}
 		switch (c) {
+		case 'm': // Monitor
+			monitor = true;
+			break;
 		case 'q': // Quiet
-			quiet = 1;
+			quiet = true;
 			break;
 		case 'r': // Raw
-			raw = 1;
+			raw = true;
 			break;
 		case 's': // Socket
 			socket_path = strdup(optarg);
@@ -270,7 +367,7 @@ int main(int argc, char **argv) {
 			cmdtype = strdup(optarg);
 			break;
 		case 'v':
-			fprintf(stdout, "sway version " SWAY_VERSION "\n");
+			fprintf(stdout, "swaymsg version " SWAY_VERSION "\n");
 			exit(EXIT_SUCCESS);
 			break;
 		default:
@@ -295,6 +392,8 @@ int main(int argc, char **argv) {
 		type = IPC_COMMAND;
 	} else if (strcasecmp(cmdtype, "get_workspaces") == 0) {
 		type = IPC_GET_WORKSPACES;
+	} else if (strcasecmp(cmdtype, "get_seats") == 0) {
+		type = IPC_GET_SEATS;
 	} else if (strcasecmp(cmdtype, "get_inputs") == 0) {
 		type = IPC_GET_INPUTS;
 	} else if (strcasecmp(cmdtype, "get_outputs") == 0) {
@@ -307,16 +406,31 @@ int main(int argc, char **argv) {
 		type = IPC_GET_BAR_CONFIG;
 	} else if (strcasecmp(cmdtype, "get_version") == 0) {
 		type = IPC_GET_VERSION;
-	} else if (strcasecmp(cmdtype, "get_clipboard") == 0) {
-		type = IPC_GET_CLIPBOARD;
+	} else if (strcasecmp(cmdtype, "get_binding_modes") == 0) {
+		type = IPC_GET_BINDING_MODES;
+	} else if (strcasecmp(cmdtype, "get_config") == 0) {
+		type = IPC_GET_CONFIG;
+	} else if (strcasecmp(cmdtype, "send_tick") == 0) {
+		type = IPC_SEND_TICK;
+	} else if (strcasecmp(cmdtype, "subscribe") == 0) {
+		type = IPC_SUBSCRIBE;
 	} else {
 		sway_abort("Unknown message type %s", cmdtype);
 	}
+
 	free(cmdtype);
 
-	char *command = strdup("");
+	if (monitor && type != IPC_SUBSCRIBE) {
+		sway_log(SWAY_ERROR, "Monitor can only be used with -t SUBSCRIBE");
+		free(socket_path);
+		return 1;
+	}
+
+	char *command = NULL;
 	if (optind < argc) {
 		command = join_args(argv + optind, argc - optind);
+	} else {
+		command = strdup("");
 	}
 
 	int ret = 0;
@@ -328,26 +442,56 @@ int main(int argc, char **argv) {
 		json_object *obj = json_tokener_parse(resp);
 
 		if (obj == NULL) {
-			fprintf(stderr, "ERROR: Could not parse json response from ipc. This is a bug in sway.");
+			fprintf(stderr, "ERROR: Could not parse json response from ipc. "
+					"This is a bug in sway.");
 			printf("%s\n", resp);
 			ret = 1;
 		} else {
 			if (!success(obj, true)) {
 				ret = 1;
 			}
-			if (raw) {
-				printf("%s\n", json_object_to_json_string_ext(obj,
-					JSON_C_TO_STRING_PRETTY | JSON_C_TO_STRING_SPACED));
-			} else {
-				pretty_print(type, obj);
+			if (type != IPC_SUBSCRIBE  || ret != 0) {
+				if (raw) {
+					printf("%s\n", json_object_to_json_string_ext(obj,
+						JSON_C_TO_STRING_PRETTY | JSON_C_TO_STRING_SPACED));
+				} else {
+					pretty_print(type, obj);
+				}
 			}
-			free(obj);
+			json_object_put(obj);
 		}
 	}
-	close(socketfd);
-
 	free(command);
 	free(resp);
+
+	if (type == IPC_SUBSCRIBE && ret == 0) {
+		do {
+			struct ipc_response *reply = ipc_recv_response(socketfd);
+			if (!reply) {
+				break;
+			}
+
+			json_object *obj = json_tokener_parse(reply->payload);
+			if (obj == NULL) {
+				fprintf(stderr, "ERROR: Could not parse json response from ipc"
+						". This is a bug in sway.");
+				ret = 1;
+				break;
+			} else {
+				if (raw) {
+					printf("%s\n", json_object_to_json_string(obj));
+				} else {
+					printf("%s\n", json_object_to_json_string_ext(obj,
+						JSON_C_TO_STRING_PRETTY | JSON_C_TO_STRING_SPACED));
+				}
+				json_object_put(obj);
+			}
+
+			free_ipc_response(reply);
+		} while (monitor);
+	}
+
+	close(socketfd);
 	free(socket_path);
 	return ret;
 }

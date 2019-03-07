@@ -1,155 +1,45 @@
-#define _XOPEN_SOURCE 700
-#include <xkbcommon/xkbcommon.h>
-#include <xkbcommon/xkbcommon-names.h>
-#include <wlc/wlc.h>
-#include <wlc/wlc-render.h>
-#include <stdio.h>
+#define _POSIX_C_SOURCE 200809
+#include <ctype.h>
+#include <stdarg.h>
 #include <stdlib.h>
-#include <errno.h>
 #include <string.h>
 #include <strings.h>
-#include <unistd.h>
-#include <ctype.h>
-#include <wordexp.h>
-#include <libgen.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <limits.h>
-#include <float.h>
-#include <libinput.h>
-#include "sway/layout.h"
-#include "sway/focus.h"
-#include "sway/workspace.h"
+#include <stdio.h>
+#include <json.h>
 #include "sway/commands.h"
-#include "sway/container.h"
-#include "sway/output.h"
-#include "sway/handlers.h"
-#include "sway/input_state.h"
+#include "sway/config.h"
 #include "sway/criteria.h"
-#include "sway/ipc-server.h"
 #include "sway/security.h"
-#include "sway/input.h"
-#include "sway/border.h"
+#include "sway/input/input-manager.h"
+#include "sway/input/seat.h"
+#include "sway/tree/view.h"
 #include "stringop.h"
-#include "sway.h"
-#include "util.h"
-#include "list.h"
 #include "log.h"
-
-struct cmd_handler {
-	char *command;
-	sway_cmd *handle;
-};
-
-int sp_index = 0;
-
-swayc_t *current_container = NULL;
 
 // Returns error object, or NULL if check succeeds.
 struct cmd_results *checkarg(int argc, const char *name, enum expected_args type, int val) {
-	struct cmd_results *error = NULL;
+	const char *error_name = NULL;
 	switch (type) {
-	case EXPECTED_MORE_THAN:
-		if (argc > val) {
-			return NULL;
-		}
-		error = cmd_results_new(CMD_INVALID, name, "Invalid %s command "
-			"(expected more than %d argument%s, got %d)",
-			name, val, (char*[2]){"s", ""}[argc==1], argc);
-		break;
 	case EXPECTED_AT_LEAST:
-		if (argc >= val) {
-			return NULL;
+		if (argc < val) {
+			error_name = "at least ";
 		}
-		error = cmd_results_new(CMD_INVALID, name, "Invalid %s command "
-			"(expected at least %d argument%s, got %d)",
-			name, val, (char*[2]){"s", ""}[argc==1], argc);
 		break;
-	case EXPECTED_LESS_THAN:
-		if (argc  < val) {
-			return NULL;
-		};
-		error = cmd_results_new(CMD_INVALID, name, "Invalid %s command "
-			"(expected less than %d argument%s, got %d)",
-			name, val, (char*[2]){"s", ""}[argc==1], argc);
+	case EXPECTED_AT_MOST:
+		if (argc > val) {
+			error_name = "at most ";
+		}
 		break;
 	case EXPECTED_EQUAL_TO:
-		if (argc == val) {
-			return NULL;
-		};
-		error = cmd_results_new(CMD_INVALID, name, "Invalid %s command "
-			"(expected %d arguments, got %d)", name, val, argc);
-		break;
-	}
-	return error;
-}
-
-void hide_view_in_scratchpad(swayc_t *sp_view) {
-	if (sp_view == NULL) {
-		return;
-	}
-
-	wlc_view_set_mask(sp_view->handle, 0);
-	sp_view->visible = false;
-	swayc_t *ws = sp_view->parent;
-	remove_child(sp_view);
-	if (swayc_active_workspace() != ws && ws->floating->length == 0 && ws->children->length == 0) {
-		destroy_workspace(ws);
-	} else {
-		arrange_windows(ws, -1, -1);
-	}
-	set_focused_container(container_under_pointer());
-}
-
-void input_cmd_apply(struct input_config *input) {
-	int i;
-	i = list_seq_find(config->input_configs, input_identifier_cmp, input->identifier);
-	if (i >= 0) {
-		// merge existing config
-		struct input_config *ic = config->input_configs->items[i];
-		merge_input_config(ic, input);
-		free_input_config(input);
-		input = ic;
-	} else {
-		list_add(config->input_configs, input);
-	}
-
-	current_input_config = input;
-
-	if (input->identifier) {
-		// Try to find the input device and apply configuration now. If
-		// this is during startup then there will be no container and config
-		// will be applied during normal "new input" event from wlc.
-		struct libinput_device *device = NULL;
-		for (int i = 0; i < input_devices->length; ++i) {
-			device = input_devices->items[i];
-			char* dev_identifier = libinput_dev_unique_id(device);
-			if (!dev_identifier) {
-				break;
-			}
-			int match = dev_identifier && strcmp(dev_identifier, input->identifier) == 0;
-			free(dev_identifier);
-			if (match) {
-				apply_input_config(input, device);
-				break;
-			}
+		if (argc != val) {
+			error_name = "";
 		}
 	}
-}
-
-void remove_view_from_scratchpad(swayc_t *view) {
-	int i;
-	for (i = 0; i < scratchpad->length; i++) {
-		if (scratchpad->items[i] == view) {
-			if (sp_index == 0) {
-				sp_index = scratchpad->length - 1;
-			} else {
-				sp_index--;
-			}
-			list_del(scratchpad, sp_index);
-			sp_view = NULL;
-		}
-	}
+	return error_name ?
+		cmd_results_new(CMD_INVALID, "Invalid %s command "
+				"(expected %s%d argument%s, got %d)",
+				name, error_name, val, val != 1 ? "s" : "", argc)
+		: NULL;
 }
 
 /* Keep alphabetized */
@@ -158,178 +48,88 @@ static struct cmd_handler handlers[] = {
 	{ "bar", cmd_bar },
 	{ "bindcode", cmd_bindcode },
 	{ "bindsym", cmd_bindsym },
-	{ "border", cmd_border },
-	{ "client.background", cmd_client_background },
+	{ "client.background", cmd_client_noop },
 	{ "client.focused", cmd_client_focused },
 	{ "client.focused_inactive", cmd_client_focused_inactive },
-	{ "client.placeholder", cmd_client_placeholder },
+	{ "client.placeholder", cmd_client_noop },
 	{ "client.unfocused", cmd_client_unfocused },
 	{ "client.urgent", cmd_client_urgent },
-	{ "clipboard", cmd_clipboard },
-	{ "commands", cmd_commands },
-	{ "debuglog", cmd_debuglog },
 	{ "default_border", cmd_default_border },
 	{ "default_floating_border", cmd_default_floating_border },
-	{ "default_orientation", cmd_orientation },
 	{ "exec", cmd_exec },
 	{ "exec_always", cmd_exec_always },
-	{ "exit", cmd_exit },
-	{ "floating", cmd_floating },
 	{ "floating_maximum_size", cmd_floating_maximum_size },
 	{ "floating_minimum_size", cmd_floating_minimum_size },
-	{ "floating_modifier", cmd_floating_mod },
-	{ "floating_scroll", cmd_floating_scroll },
+	{ "floating_modifier", cmd_floating_modifier },
 	{ "focus", cmd_focus },
 	{ "focus_follows_mouse", cmd_focus_follows_mouse },
+	{ "focus_on_window_activation", cmd_focus_on_window_activation },
+	{ "focus_wrapping", cmd_focus_wrapping },
 	{ "font", cmd_font },
 	{ "for_window", cmd_for_window },
+	{ "force_display_urgency_hint", cmd_force_display_urgency_hint },
 	{ "force_focus_wrapping", cmd_force_focus_wrapping },
 	{ "fullscreen", cmd_fullscreen },
 	{ "gaps", cmd_gaps },
 	{ "hide_edge_borders", cmd_hide_edge_borders },
 	{ "include", cmd_include },
 	{ "input", cmd_input },
-	{ "ipc", cmd_ipc },
-	{ "kill", cmd_kill },
-	{ "layout", cmd_layout },
-	{ "log_colors", cmd_log_colors },
-	{ "mark", cmd_mark },
 	{ "mode", cmd_mode },
 	{ "mouse_warping", cmd_mouse_warping },
-	{ "move", cmd_move },
-	{ "new_float", cmd_new_float },
-	{ "new_window", cmd_new_window },
+	{ "new_float", cmd_default_floating_border },
+	{ "new_window", cmd_default_border },
 	{ "no_focus", cmd_no_focus },
 	{ "output", cmd_output },
-	{ "permit", cmd_permit },
-	{ "reject", cmd_reject },
-	{ "reload", cmd_reload },
-	{ "resize", cmd_resize },
-	{ "scratchpad", cmd_scratchpad },
-	{ "seamless_mouse", cmd_seamless_mouse },
+	{ "popup_during_fullscreen", cmd_popup_during_fullscreen },
+	{ "seat", cmd_seat },
 	{ "set", cmd_set },
 	{ "show_marks", cmd_show_marks },
+	{ "smart_borders", cmd_smart_borders },
 	{ "smart_gaps", cmd_smart_gaps },
+	{ "tiling_drag", cmd_tiling_drag },
+	{ "tiling_drag_threshold", cmd_tiling_drag_threshold },
+	{ "title_align", cmd_title_align },
+	{ "titlebar_border_thickness", cmd_titlebar_border_thickness },
+	{ "titlebar_padding", cmd_titlebar_padding },
+	{ "workspace", cmd_workspace },
+	{ "workspace_auto_back_and_forth", cmd_ws_auto_back_and_forth },
+};
+
+/* Config-time only commands. Keep alphabetized */
+static struct cmd_handler config_handlers[] = {
+	{ "default_orientation", cmd_default_orientation },
+	{ "swaybg_command", cmd_swaybg_command },
+	{ "swaynag_command", cmd_swaynag_command },
+	{ "workspace_layout", cmd_workspace_layout },
+	{ "xwayland", cmd_xwayland },
+};
+
+/* Runtime-only commands. Keep alphabetized */
+static struct cmd_handler command_handlers[] = {
+	{ "border", cmd_border },
+	{ "create_output", cmd_create_output },
+	{ "exit", cmd_exit },
+	{ "floating", cmd_floating },
+	{ "fullscreen", cmd_fullscreen },
+	{ "kill", cmd_kill },
+	{ "layout", cmd_layout },
+	{ "mark", cmd_mark },
+	{ "move", cmd_move },
+	{ "nop", cmd_nop },
+	{ "opacity", cmd_opacity },
+	{ "reload", cmd_reload },
+	{ "rename", cmd_rename },
+	{ "resize", cmd_resize },
+	{ "scratchpad", cmd_scratchpad },
 	{ "split", cmd_split },
 	{ "splith", cmd_splith },
 	{ "splitt", cmd_splitt },
 	{ "splitv", cmd_splitv },
 	{ "sticky", cmd_sticky },
+	{ "swap", cmd_swap },
+	{ "title_format", cmd_title_format },
 	{ "unmark", cmd_unmark },
-	{ "workspace", cmd_workspace },
-	{ "workspace_auto_back_and_forth", cmd_ws_auto_back_and_forth },
-	{ "workspace_layout", cmd_workspace_layout },
-};
-
-static struct cmd_handler bar_handlers[] = {
-	{ "activate_button", bar_cmd_activate_button },
-	{ "binding_mode_indicator", bar_cmd_binding_mode_indicator },
-	{ "bindsym", bar_cmd_bindsym },
-	{ "colors", bar_cmd_colors },
-	{ "context_button", bar_cmd_context_button },
-	{ "font", bar_cmd_font },
-	{ "height", bar_cmd_height },
-	{ "hidden_state", bar_cmd_hidden_state },
-	{ "icon_theme", bar_cmd_icon_theme },
-	{ "id", bar_cmd_id },
-	{ "mode", bar_cmd_mode },
-	{ "modifier", bar_cmd_modifier },
-	{ "output", bar_cmd_output },
-	{ "pango_markup", bar_cmd_pango_markup },
-	{ "position", bar_cmd_position },
-	{ "secondary_button", bar_cmd_secondary_button },
-	{ "separator_symbol", bar_cmd_separator_symbol },
-	{ "status_command", bar_cmd_status_command },
-	{ "strip_workspace_numbers", bar_cmd_strip_workspace_numbers },
-	{ "swaybar_command", bar_cmd_swaybar_command },
-	{ "tray_output", bar_cmd_tray_output },
-	{ "tray_padding", bar_cmd_tray_padding },
-	{ "workspace_buttons", bar_cmd_workspace_buttons },
-	{ "wrap_scroll", bar_cmd_wrap_scroll },
-};
-
-/**
- * Check and add color to buffer.
- *
- * return error object, or NULL if color is valid.
- */
-struct cmd_results *add_color(const char *name, char *buffer, const char *color) {
-	int len = strlen(color);
-	if (len != 7 && len != 9) {
-		return cmd_results_new(CMD_INVALID, name, "Invalid color definition %s", color);
-	}
-
-	if (color[0] != '#') {
-		return cmd_results_new(CMD_INVALID, name, "Invalid color definition %s", color);
-	}
-
-	int i;
-	for (i = 1; i < len; ++i) {
-		if (!isxdigit(color[i])) {
-			return cmd_results_new(CMD_INVALID, name, "Invalid color definition %s", color);
-		}
-	}
-
-	// copy color to buffer
-	strncpy(buffer, color, len);
-	// add default alpha channel if color was defined without it
-	if (len == 7) {
-		buffer[7] = 'f';
-		buffer[8] = 'f';
-	}
-	buffer[9] = '\0';
-
-	return NULL;
-}
-
-static struct cmd_handler input_handlers[] = {
-	{ "accel_profile", input_cmd_accel_profile },
-	{ "click_method", input_cmd_click_method },
-	{ "drag_lock", input_cmd_drag_lock },
-	{ "dwt", input_cmd_dwt },
-	{ "events", input_cmd_events },
-	{ "left_handed", input_cmd_left_handed },
-	{ "middle_emulation", input_cmd_middle_emulation },
-	{ "natural_scroll", input_cmd_natural_scroll },
-	{ "pointer_accel", input_cmd_pointer_accel },
-	{ "scroll_method", input_cmd_scroll_method },
-	{ "tap", input_cmd_tap },
-};
-
-static struct cmd_handler bar_colors_handlers[] = {
-	{ "active_workspace", bar_colors_cmd_active_workspace },
-	{ "background", bar_colors_cmd_background },
-	{ "binding_mode", bar_colors_cmd_binding_mode },
-	{ "focused_background", bar_colors_cmd_focused_background },
-	{ "focused_separator", bar_colors_cmd_focused_separator },
-	{ "focused_statusline", bar_colors_cmd_focused_statusline },
-	{ "focused_workspace", bar_colors_cmd_focused_workspace },
-	{ "inactive_workspace", bar_colors_cmd_inactive_workspace },
-	{ "separator", bar_colors_cmd_separator },
-	{ "statusline", bar_colors_cmd_statusline },
-	{ "urgent_workspace", bar_colors_cmd_urgent_workspace },
-};
-
-static struct cmd_handler ipc_handlers[] = {
-	{ "*", cmd_ipc_cmd },
-	{ "bar-config", cmd_ipc_cmd },
-	{ "command", cmd_ipc_cmd },
-	{ "events", cmd_ipc_events },
-	{ "inputs", cmd_ipc_cmd },
-	{ "marks", cmd_ipc_cmd },
-	{ "outputs", cmd_ipc_cmd },
-	{ "tree", cmd_ipc_cmd },
-	{ "workspaces", cmd_ipc_cmd },
-};
-
-static struct cmd_handler ipc_event_handlers[] = {
-	{ "*", cmd_ipc_event_cmd },
-	{ "binding", cmd_ipc_event_cmd },
-	{ "input", cmd_ipc_event_cmd },
-	{ "mode", cmd_ipc_event_cmd },
-	{ "output", cmd_ipc_event_cmd },
-	{ "window", cmd_ipc_event_cmd },
-	{ "workspace", cmd_ipc_event_cmd },
+	{ "urgent", cmd_urgent },
 };
 
 static int handler_compare(const void *_a, const void *_b) {
@@ -338,95 +138,125 @@ static int handler_compare(const void *_a, const void *_b) {
 	return strcasecmp(a->command, b->command);
 }
 
-static struct cmd_handler *find_handler(char *line, enum cmd_status block) {
+struct cmd_handler *find_handler(char *line, struct cmd_handler *cmd_handlers,
+		int handlers_size) {
 	struct cmd_handler d = { .command=line };
 	struct cmd_handler *res = NULL;
-	sway_log(L_DEBUG, "find_handler(%s) %d", line, block == CMD_BLOCK_INPUT);
-	if (block == CMD_BLOCK_BAR) {
-		res = bsearch(&d, bar_handlers,
-			sizeof(bar_handlers) / sizeof(struct cmd_handler),
-			sizeof(struct cmd_handler), handler_compare);
-	} else if (block == CMD_BLOCK_BAR_COLORS){
-		res = bsearch(&d, bar_colors_handlers,
-			sizeof(bar_colors_handlers) / sizeof(struct cmd_handler),
-			sizeof(struct cmd_handler), handler_compare);
-	} else if (block == CMD_BLOCK_INPUT) {
-		res = bsearch(&d, input_handlers,
-			sizeof(input_handlers) / sizeof(struct cmd_handler),
-			sizeof(struct cmd_handler), handler_compare);
-	} else if (block == CMD_BLOCK_IPC) {
-		res = bsearch(&d, ipc_handlers,
-			sizeof(ipc_handlers) / sizeof(struct cmd_handler),
-			sizeof(struct cmd_handler), handler_compare);
-	} else if (block == CMD_BLOCK_IPC_EVENTS) {
-		res = bsearch(&d, ipc_event_handlers,
-			sizeof(ipc_event_handlers) / sizeof(struct cmd_handler),
-			sizeof(struct cmd_handler), handler_compare);
-	} else {
-		res = bsearch(&d, handlers,
-			sizeof(handlers) / sizeof(struct cmd_handler),
-			sizeof(struct cmd_handler), handler_compare);
+	sway_log(SWAY_DEBUG, "find_handler(%s)", line);
+
+	bool config_loading = config->reading || !config->active;
+
+	if (!config_loading) {
+		res = bsearch(&d, command_handlers,
+				sizeof(command_handlers) / sizeof(struct cmd_handler),
+				sizeof(struct cmd_handler), handler_compare);
+
+		if (res) {
+			return res;
+		}
 	}
+
+	if (config->reading) {
+		res = bsearch(&d, config_handlers,
+				sizeof(config_handlers) / sizeof(struct cmd_handler),
+				sizeof(struct cmd_handler), handler_compare);
+
+		if (res) {
+			return res;
+		}
+	}
+
+	if (!cmd_handlers) {
+		cmd_handlers = handlers;
+		handlers_size = sizeof(handlers);
+	}
+
+	res = bsearch(&d, cmd_handlers,
+			handlers_size / sizeof(struct cmd_handler),
+			sizeof(struct cmd_handler), handler_compare);
+
 	return res;
 }
 
-struct cmd_results *handle_command(char *_exec, enum command_context context) {
-	// Even though this function will process multiple commands we will only
-	// return the last error, if any (for now). (Since we have access to an
-	// error string we could e.g. concatonate all errors there.)
-	struct cmd_results *results = NULL;
+static void set_config_node(struct sway_node *node) {
+	config->handler_context.node = node;
+	config->handler_context.container = NULL;
+	config->handler_context.workspace = NULL;
+
+	if (node == NULL) {
+		return;
+	}
+
+	switch (node->type) {
+	case N_CONTAINER:
+		config->handler_context.container = node->sway_container;
+		config->handler_context.workspace = node->sway_container->workspace;
+		break;
+	case N_WORKSPACE:
+		config->handler_context.workspace = node->sway_workspace;
+		break;
+	case N_ROOT:
+	case N_OUTPUT:
+		break;
+	}
+}
+
+list_t *execute_command(char *_exec, struct sway_seat *seat,
+		struct sway_container *con) {
+	list_t *res_list = create_list();
 	char *exec = strdup(_exec);
 	char *head = exec;
 	char *cmdlist;
 	char *cmd;
-	list_t *containers = NULL;
+	list_t *views = NULL;
+
+	if (seat == NULL) {
+		// passing a NULL seat means we just pick the default seat
+		seat = input_manager_get_default_seat();
+		if (!sway_assert(seat, "could not find a seat to run the command on")) {
+			return NULL;
+		}
+	}
+
+	config->handler_context.seat = seat;
 
 	head = exec;
 	do {
 		// Extract criteria (valid for this command list only).
+		config->handler_context.using_criteria = false;
 		if (*head == '[') {
-			++head;
-			char *criteria_string = argsep(&head, "]");
-			if (head) {
-				++head;
-				list_t *tokens = create_list();
-				char *error;
-
-				if ((error = extract_crit_tokens(tokens, criteria_string))) {
-					results = cmd_results_new(CMD_INVALID, criteria_string,
-						"Can't parse criteria string: %s", error);
-					free(error);
-					free(tokens);
-					goto cleanup;
-				}
-				containers = container_for(tokens);
-
-				free(tokens);
-			} else {
-				if (!results) {
-					results = cmd_results_new(CMD_INVALID, criteria_string, "Unmatched [");
-				}
+			char *error = NULL;
+			struct criteria *criteria = criteria_parse(head, &error);
+			if (!criteria) {
+				list_add(res_list, cmd_results_new(CMD_INVALID,	"%s", error));
+				free(error);
 				goto cleanup;
 			}
+			views = criteria_get_views(criteria);
+			head += strlen(criteria->raw);
+			criteria_destroy(criteria);
+			config->handler_context.using_criteria = true;
 			// Skip leading whitespace
-			head += strspn(head, whitespace);
+			for (; isspace(*head); ++head) {}
 		}
 		// Split command list
 		cmdlist = argsep(&head, ";");
-		cmdlist += strspn(cmdlist, whitespace);
+		for (; isspace(*cmdlist); ++cmdlist) {}
 		do {
 			// Split commands
 			cmd = argsep(&cmdlist, ",");
-			cmd += strspn(cmd, whitespace);
+			for (; isspace(*cmd); ++cmd) {}
 			if (strcmp(cmd, "") == 0) {
-				sway_log(L_INFO, "Ignoring empty command.");
+				sway_log(SWAY_INFO, "Ignoring empty command.");
 				continue;
 			}
-			sway_log(L_INFO, "Handling command '%s'", cmd);
+			sway_log(SWAY_INFO, "Handling command '%s'", cmd);
 			//TODO better handling of argv
 			int argc;
 			char **argv = split_args(cmd, &argc);
-			if (strcmp(argv[0], "exec") != 0) {
+			if (strcmp(argv[0], "exec") != 0 &&
+					strcmp(argv[0], "exec_always") != 0 &&
+					strcmp(argv[0], "mode") != 0) {
 				int i;
 				for (i = 1; i < argc; ++i) {
 					if (*argv[i] == '\"' || *argv[i] == '\'') {
@@ -434,120 +264,160 @@ struct cmd_results *handle_command(char *_exec, enum command_context context) {
 					}
 				}
 			}
-			struct cmd_handler *handler = find_handler(argv[0], CMD_BLOCK_END);
+			struct cmd_handler *handler = find_handler(argv[0], NULL, 0);
 			if (!handler) {
-				if (results) {
-					free_cmd_results(results);
-				}
-				results = cmd_results_new(CMD_INVALID, cmd, "Unknown/invalid command");
+				list_add(res_list, cmd_results_new(CMD_INVALID,
+						"Unknown/invalid command '%s'", argv[0]));
 				free_argv(argc, argv);
 				goto cleanup;
 			}
-			if (!(get_command_policy_mask(argv[0]) & context)) {
-				if (results) {
-					free_cmd_results(results);
-				}
-				results = cmd_results_new(CMD_INVALID, cmd,
-						"Permission denied for %s via %s", cmd,
-						command_policy_str(context));
-				free_argv(argc, argv);
-				goto cleanup;
-			}
-			int i = 0;
-			do {
-				if (!containers) {
-					current_container = get_focused_container(&root_container);
-				} else if (containers->length == 0) {
-					if (results) {
-						free_cmd_results(results);
-					}
-					results = cmd_results_new(CMD_FAILURE, argv[0], "No matching container");
-					goto cleanup;
-				} else {
-					current_container = (swayc_t *)containers->items[i];
-				}
-				sway_log(L_INFO, "Running on container '%s'", current_container->name);
 
+			// Var replacement, for all but first argument of set
+			for (int i = handler->handle == cmd_set ? 2 : 1; i < argc; ++i) {
+				argv[i] = do_var_replacement(argv[i]);
+				unescape_string(argv[i]);
+			}
+
+			if (!config->handler_context.using_criteria) {
+				// The container or workspace which this command will run on.
+				struct sway_node *node = con ? &con->node :
+						seat_get_focus_inactive(seat, &root->node);
+				set_config_node(node);
 				struct cmd_results *res = handler->handle(argc-1, argv+1);
-				if (res->status != CMD_SUCCESS) {
+				list_add(res_list, res);
+				if (res->status == CMD_INVALID) {
 					free_argv(argc, argv);
-					if (results) {
-						free_cmd_results(results);
-					}
-					results = res;
 					goto cleanup;
 				}
-				free_cmd_results(res);
-				++i;
-			} while(containers && i < containers->length);
-
+			} else {
+				for (int i = 0; i < views->length; ++i) {
+					struct sway_view *view = views->items[i];
+					set_config_node(&view->container->node);
+					struct cmd_results *res = handler->handle(argc-1, argv+1);
+					list_add(res_list, res);
+					if (res->status == CMD_INVALID) {
+						free_argv(argc, argv);
+						goto cleanup;
+					}
+				}
+			}
 			free_argv(argc, argv);
 		} while(cmdlist);
-
-		if (containers) {
-			list_free(containers);
-			containers = NULL;
-		}
 	} while(head);
-	cleanup:
+cleanup:
 	free(exec);
-	if (containers) {
-		free(containers);
-	}
-	if (!results) {
-		results = cmd_results_new(CMD_SUCCESS, NULL, NULL);
-	}
-	return results;
+	list_free(views);
+	return res_list;
 }
 
-// this is like handle_command above, except:
+// this is like execute_command above, except:
 // 1) it ignores empty commands (empty lines)
 // 2) it does variable substitution
 // 3) it doesn't split commands (because the multiple commands are supposed to
 //	  be chained together)
-// 4) handle_command handles all state internally while config_command has some
-//	  state handled outside (notably the block mode, in read_config)
-struct cmd_results *config_command(char *exec, enum cmd_status block) {
+// 4) execute_command handles all state internally while config_command has
+// some state handled outside (notably the block mode, in read_config)
+struct cmd_results *config_command(char *exec, char **new_block) {
 	struct cmd_results *results = NULL;
 	int argc;
 	char **argv = split_args(exec, &argc);
+
+	// Check for empty lines
 	if (!argc) {
-		results = cmd_results_new(CMD_SUCCESS, NULL, NULL);
+		results = cmd_results_new(CMD_SUCCESS, NULL);
 		goto cleanup;
 	}
 
-	sway_log(L_INFO, "handling config command '%s'", exec);
-	// Endblock
-	if (**argv == '}') {
-		results = cmd_results_new(CMD_BLOCK_END, NULL, NULL);
+	// Check for the start of a block
+	if (argc > 1 && strcmp(argv[argc - 1], "{") == 0) {
+		*new_block = join_args(argv, argc - 1);
+		results = cmd_results_new(CMD_BLOCK, NULL);
 		goto cleanup;
 	}
-	struct cmd_handler *handler = find_handler(argv[0], block);
-	if (!handler) {
-		char *input = argv[0] ? argv[0] : "(empty)";
-		results = cmd_results_new(CMD_INVALID, input, "Unknown/invalid command");
+
+	// Check for the end of a block
+	if (strcmp(argv[argc - 1], "}") == 0) {
+		results = cmd_results_new(CMD_BLOCK_END, NULL);
 		goto cleanup;
 	}
-	int i;
-	// Var replacement, for all but first argument of set
-	for (i = handler->handle == cmd_set ? 2 : 1; i < argc; ++i) {
-		argv[i] = do_var_replacement(argv[i]);
+
+	// Make sure the command is not stored in a variable
+	if (*argv[0] == '$') {
+		argv[0] = do_var_replacement(argv[0]);
+		char *temp = join_args(argv, argc);
+		free_argv(argc, argv);
+		argv = split_args(temp, &argc);
+		free(temp);
+		if (!argc) {
+			results = cmd_results_new(CMD_SUCCESS, NULL);
+			goto cleanup;
+		}
+	}
+
+	// Determine the command handler
+	sway_log(SWAY_INFO, "Config command: %s", exec);
+	struct cmd_handler *handler = find_handler(argv[0], NULL, 0);
+	if (!handler || !handler->handle) {
+		const char *error = handler
+			? "Command '%s' is shimmed, but unimplemented"
+			: "Unknown/invalid command '%s'";
+		results = cmd_results_new(CMD_INVALID, error, argv[0]);
+		goto cleanup;
+	}
+
+	// Do variable replacement
+	if (handler->handle == cmd_set && argc > 1 && *argv[1] == '$') {
+		// Escape the variable name so it does not get replaced by one shorter
+		char *temp = calloc(1, strlen(argv[1]) + 2);
+		temp[0] = '$';
+		strcpy(&temp[1], argv[1]);
+		free(argv[1]);
+		argv[1] = temp;
+	}
+	char *command = do_var_replacement(join_args(argv, argc));
+	sway_log(SWAY_INFO, "After replacement: %s", command);
+	free_argv(argc, argv);
+	argv = split_args(command, &argc);
+	free(command);
+
+	// Strip quotes and unescape the string
+	for (int i = handler->handle == cmd_set ? 2 : 1; i < argc; ++i) {
+		if (handler->handle != cmd_exec && handler->handle != cmd_exec_always
+				&& handler->handle != cmd_mode
+				&& handler->handle != cmd_bindsym
+				&& handler->handle != cmd_bindcode
+				&& handler->handle != cmd_set
+				&& (*argv[i] == '\"' || *argv[i] == '\'')) {
+			strip_quotes(argv[i]);
+		}
 		unescape_string(argv[i]);
 	}
-	/* Strip quotes for first argument.
-	 * TODO This part needs to be handled much better */
-	if (argc>1 && (*argv[1] == '\"' || *argv[1] == '\'')) {
-		strip_quotes(argv[1]);
-	}
-	if (handler->handle) {
-		results = handler->handle(argc-1, argv+1);
-	} else {
-		results = cmd_results_new(CMD_INVALID, argv[0], "This command is shimmed, but unimplemented");
-	}
+
+	// Run command
+	results = handler->handle(argc - 1, argv + 1);
 
 cleanup:
 	free_argv(argc, argv);
 	return results;
+}
+
+struct cmd_results *config_subcommand(char **argv, int argc,
+		struct cmd_handler *handlers, size_t handlers_size) {
+	char *command = join_args(argv, argc);
+	sway_log(SWAY_DEBUG, "Subcommand: %s", command);
+	free(command);
+
+	struct cmd_handler *handler = find_handler(argv[0], handlers,
+			handlers_size);
+	if (!handler) {
+		return cmd_results_new(CMD_INVALID,
+				"Unknown/invalid command '%s'", argv[0]);
+	}
+	if (handler->handle) {
+		return handler->handle(argc - 1, argv + 1);
+	}
+	return cmd_results_new(CMD_INVALID,
+			"The command '%s' is shimmed, but unimplemented", argv[0]);
 }
 
 struct cmd_results *config_commands_command(char *exec) {
@@ -555,7 +425,7 @@ struct cmd_results *config_commands_command(char *exec) {
 	int argc;
 	char **argv = split_args(exec, &argc);
 	if (!argc) {
-		results = cmd_results_new(CMD_SUCCESS, NULL, NULL);
+		results = cmd_results_new(CMD_SUCCESS, NULL);
 		goto cleanup;
 	}
 
@@ -563,14 +433,14 @@ struct cmd_results *config_commands_command(char *exec) {
 	char *cmd = argv[0];
 
 	if (strcmp(cmd, "}") == 0) {
-		results = cmd_results_new(CMD_BLOCK_END, NULL, NULL);
+		results = cmd_results_new(CMD_BLOCK_END, NULL);
 		goto cleanup;
 	}
 
-	struct cmd_handler *handler = find_handler(cmd, CMD_BLOCK_END);
+	struct cmd_handler *handler = find_handler(cmd, NULL, 0);
 	if (!handler && strcmp(cmd, "*") != 0) {
-		char *input = cmd ? cmd : "(empty)";
-		results = cmd_results_new(CMD_INVALID, input, "Unknown/invalid command");
+		results = cmd_results_new(CMD_INVALID,
+			"Unknown/invalid command '%s'", cmd);
 		goto cleanup;
 	}
 
@@ -595,7 +465,7 @@ struct cmd_results *config_commands_command(char *exec) {
 			}
 		}
 		if (j == sizeof(context_names) / sizeof(context_names[0])) {
-			results = cmd_results_new(CMD_INVALID, cmd,
+			results = cmd_results_new(CMD_INVALID,
 					"Invalid command context %s", argv[i]);
 			goto cleanup;
 		}
@@ -612,35 +482,33 @@ struct cmd_results *config_commands_command(char *exec) {
 	}
 	if (!policy) {
 		policy = alloc_command_policy(cmd);
-		sway_assert(policy, "Unable to allocate security policy");
-		if (policy) {
-			list_add(config->command_policies, policy);
+		if (!sway_assert(policy, "Unable to allocate security policy")) {
+			results = cmd_results_new(CMD_INVALID,
+					"Unable to allocate memory");
+			goto cleanup;
 		}
+		list_add(config->command_policies, policy);
 	}
 	policy->context = context;
 
-	sway_log(L_INFO, "Set command policy for %s to %d",
+	sway_log(SWAY_INFO, "Set command policy for %s to %d",
 			policy->command, policy->context);
 
-	results = cmd_results_new(CMD_SUCCESS, NULL, NULL);
+	results = cmd_results_new(CMD_SUCCESS, NULL);
 
 cleanup:
 	free_argv(argc, argv);
 	return results;
 }
 
-struct cmd_results *cmd_results_new(enum cmd_status status, const char* input, const char *format, ...) {
+struct cmd_results *cmd_results_new(enum cmd_status status,
+		const char *format, ...) {
 	struct cmd_results *results = malloc(sizeof(struct cmd_results));
 	if (!results) {
-		sway_log(L_ERROR, "Unable to allocate command results");
+		sway_log(SWAY_ERROR, "Unable to allocate command results");
 		return NULL;
 	}
 	results->status = status;
-	if (input) {
-		results->input = strdup(input); // input is the command name
-	} else {
-		results->input = NULL;
-	}
 	if (format) {
 		char *error = malloc(256);
 		va_list args;
@@ -657,28 +525,60 @@ struct cmd_results *cmd_results_new(enum cmd_status status, const char* input, c
 }
 
 void free_cmd_results(struct cmd_results *results) {
-	if (results->input) {
-		free(results->input);
-	}
 	if (results->error) {
 		free(results->error);
 	}
 	free(results);
 }
 
-const char *cmd_results_to_json(struct cmd_results *results) {
+char *cmd_results_to_json(list_t *res_list) {
 	json_object *result_array = json_object_new_array();
-	json_object *root = json_object_new_object();
-	json_object_object_add(root, "success", json_object_new_boolean(results->status == CMD_SUCCESS));
-	if (results->input) {
-		json_object_object_add(root, "input", json_object_new_string(results->input));
+	for (int i = 0; i < res_list->length; ++i) {
+		struct cmd_results *results = res_list->items[i];
+		json_object *root = json_object_new_object();
+		json_object_object_add(root, "success",
+				json_object_new_boolean(results->status == CMD_SUCCESS));
+		if (results->error) {
+			json_object_object_add(root, "parse_error",
+					json_object_new_boolean(results->status == CMD_INVALID));
+			json_object_object_add(
+					root, "error", json_object_new_string(results->error));
+		}
+		json_object_array_add(result_array, root);
 	}
-	if (results->error) {
-		json_object_object_add(root, "error", json_object_new_string(results->error));
-	}
-	json_object_array_add(result_array, root);
 	const char *json = json_object_to_json_string(result_array);
-	free(result_array);
-	free(root);
-	return json;
+	char *res = strdup(json);
+	json_object_put(result_array);
+	return res;
+}
+
+/**
+ * Check and add color to buffer.
+ *
+ * return error object, or NULL if color is valid.
+ */
+struct cmd_results *add_color(char *buffer, const char *color) {
+	int len = strlen(color);
+	if (len != 7 && len != 9) {
+		return cmd_results_new(CMD_INVALID,
+				"Invalid color definition %s", color);
+	}
+	if (color[0] != '#') {
+		return cmd_results_new(CMD_INVALID,
+				"Invalid color definition %s", color);
+	}
+	for (int i = 1; i < len; ++i) {
+		if (!isxdigit(color[i])) {
+			return cmd_results_new(CMD_INVALID,
+					"Invalid color definition %s", color);
+		}
+	}
+	strcpy(buffer, color);
+	// add default alpha channel if color was defined without it
+	if (len == 7) {
+		buffer[7] = 'f';
+		buffer[8] = 'f';
+	}
+	buffer[9] = '\0';
+	return NULL;
 }

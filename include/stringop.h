@@ -1,25 +1,21 @@
 #ifndef _SWAY_STRINGOP_H
 #define _SWAY_STRINGOP_H
+
 #include "list.h"
 
-#if !HAVE_DECL_SETENV
-// Not sure why we need to provide this
-extern int setenv(const char *, const char *, int);
-#endif
-
-// array of whitespace characters to use for delims
-extern const char whitespace[];
-
-char *strip_whitespace(char *str);
+void strip_whitespace(char *str);
 char *strip_comments(char *str);
 void strip_quotes(char *str);
+
+// strcat that does nothing if dest or src is NULL
+char *lenient_strcat(char *dest, const char *src);
+char *lenient_strncat(char *dest, const char *src, size_t len);
 
 // strcmp that also handles null pointers.
 int lenient_strcmp(char *a, char *b);
 
-// Simply split a string with delims, free with `free_flat_list`
+// Simply split a string with delims, free with `list_free_items_and_destroy`
 list_t *split_string(const char *str, const char *delims);
-void free_flat_list(list_t *list);
 
 // Splits an argument string, keeping quotes intact
 char **split_args(const char *str, int *argc);
@@ -40,5 +36,7 @@ void add_quotes(char **argv, int argc);
 char *cmdsep(char **stringp, const char *delim);
 // Split string into 2 by delim, handle quotes
 char *argsep(char **stringp, const char *delim);
+
+const char *strcasestr(const char *haystack, const char *needle);
 
 #endif

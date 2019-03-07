@@ -1,10 +1,9 @@
-# sway [![](https://api.travis-ci.org/swaywm/sway.svg)](https://travis-ci.org/swaywm/sway) [![Donate with fosspay](https://drewdevault.com/donate/static/donate-with-fosspay.png)](https://drewdevault.com/donate?project=4)
+# sway
 
-"**S**irCmpwn's **Way**land compositor" è un compositor 
-[Wayland](http://wayland.freedesktop.org/) **in via di sviluppo** 
-compatibile con i3.
-Leggi le [FAQ (in Inglese)](https://github.com/swaywm/sway/wiki). Unisciti al
-[canale IRC (in Inglese)](http://webchat.freenode.net/?channels=sway&uio=d4) (#sway on
+Sway è un compositor [Wayland](http://wayland.freedesktop.org/) **in via di
+sviluppo** compatibile con i3.  Leggi le [FAQ (in
+Inglese)](https://github.com/swaywm/sway/wiki). Unisciti al [canale IRC (in
+Inglese)](http://webchat.freenode.net/?channels=sway&uio=d4) (#sway on
 irc.freenode.net).
 
 [![](https://sr.ht/ICd5.png)](https://sr.ht/ICd5.png)
@@ -25,14 +24,6 @@ Questa traduzione non è ancora completa. [Clicca qui per maggiori informazioni]
 Le release sono firmate con [B22DA89A](http://pgp.mit.edu/pks/lookup?op=vindex&search=0x52CB6609B22DA89A)
 e pubblicate [su GitHub](https://github.com/swaywm/sway/releases).
 
-## Status
-
-- [supporto funzionalità i3](https://github.com/swaywm/sway/issues/2)
-- [supporto funzionalità IPC](https://github.com/swaywm/sway/issues/98)
-- [supporto funzionalità i3bar](https://github.com/swaywm/sway/issues/343)
-- [supporto funzionalità i3-gaps](https://github.com/swaywm/sway/issues/307)
-- [sicurezza](https://github.com/swaywm/sway/issues/984)
-
 ## Installazione
 
 ### Dai pacchetti
@@ -48,37 +39,27 @@ a sir@cmpwn.com.
 
 Installa queste dipendenze:
 
-* cmake
+* meson
 * [wlc](https://github.com/Cloudef/wlc)
 * wayland
 * xwayland
 * libinput >= 1.6.0
 * libcap
-* asciidoc
 * pcre
-* json-c <= 0.12.1
+* json-c >= 0.13
 * pango
 * cairo
 * gdk-pixbuf2 *
-* pam **
-* imagemagick (richiesto per catturare immagini con swaygrab)
-* ffmpeg (rrichiesto per catturare video con swaygrab)
+* [scdoc](https://git.sr.ht/~sircmpwn/scdoc) (rrichiesto per man pages)
+* git
 
-_\*Richiesto solo per swaybar, swaybg, e swaylock_
-
-_\*\*Richiesto solo per swaylock_
+_\*Richiesto solo per swaybar, swaybg_
 
 Esegui questi comandi:
 
-    mkdir build
-    cd build
-    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_SYSCONFDIR=/etc ..
-    make
-    sudo make install
-
-Per i sistemi con logind, devi impostare un paio di caps sull'eseguibile:
-
-    sudo setcap "cap_sys_ptrace,cap_sys_tty_config=eip" /usr/local/bin/sway
+    meson build
+    ninja -C build
+    sudo ninja -C build install
 
 Per i sistemi senza logind, devi cambiare i permessi (suid):
 

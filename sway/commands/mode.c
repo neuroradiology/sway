@@ -1,4 +1,4 @@
-#define _XOPEN_SOURCE 500
+#define _POSIX_C_SOURCE 200809L
 #include <stdbool.h>
 #include <string.h>
 #include <strings.h>
@@ -7,6 +7,13 @@
 #include "sway/ipc-server.h"
 #include "list.h"
 #include "log.h"
+#include "stringop.h"
+
+// Must be in order for the bsearch
+static struct cmd_handler mode_handlers[] = {
+	{ "bindcode", cmd_bindcode },
+	{ "bindsym", cmd_bindsym }
+};
 
 struct cmd_results *cmd_mode(int argc, char **argv) {
 	struct cmd_results *error = NULL;
@@ -14,44 +21,63 @@ struct cmd_results *cmd_mode(int argc, char **argv) {
 		return error;
 	}
 
-	const char *mode_name = argv[0];
-	bool mode_make = (argc == 2 && strcmp(argv[1], "{") == 0);
-	if (mode_make) {
-		if (!config->reading)
-			return cmd_results_new(CMD_FAILURE, "mode", "Can only be used in config file.");
+	if (argc > 1 && !config->reading) {
+		return cmd_results_new(CMD_FAILURE, "Can only be used in config file");
 	}
+
+	bool pango = strcmp(*argv, "--pango_markup") == 0;
+	if (pango) {
+		argc--; argv++;
+		if (argc == 0) {
+			return cmd_results_new(CMD_FAILURE, "Mode name is missing");
+		}
+	}
+
+	char *mode_name = *argv;
+	strip_quotes(mode_name);
 	struct sway_mode *mode = NULL;
 	// Find mode
-	int i, len = config->modes->length;
-	for (i = 0; i < len; ++i) {
-		struct sway_mode *find = config->modes->items[i];
-		if (strcasecmp(find->name, mode_name) == 0) {
-			mode = find;
+	for (int i = 0; i < config->modes->length; ++i) {
+		struct sway_mode *test = config->modes->items[i];
+		if (strcasecmp(test->name, mode_name) == 0) {
+			mode = test;
 			break;
 		}
 	}
 	// Create mode if it doesn't exist
-	if (!mode && mode_make) {
-		mode = malloc(sizeof(struct sway_mode));
+	if (!mode && argc > 1) {
+		mode = calloc(1, sizeof(struct sway_mode));
 		if (!mode) {
-			return cmd_results_new(CMD_FAILURE, "mode", "Unable to allocate mode");
+			return cmd_results_new(CMD_FAILURE, "Unable to allocate mode");
 		}
 		mode->name = strdup(mode_name);
-		mode->bindings = create_list();
+		mode->keysym_bindings = create_list();
+		mode->keycode_bindings = create_list();
+		mode->mouse_bindings = create_list();
+		mode->pango = pango;
 		list_add(config->modes, mode);
 	}
 	if (!mode) {
-		error = cmd_results_new(CMD_INVALID, "mode", "Unknown mode `%s'", mode_name);
+		error = cmd_results_new(CMD_INVALID, "Unknown mode `%s'", mode_name);
 		return error;
 	}
-	if ((config->reading && mode_make) || (!config->reading && !mode_make)) {
-		sway_log(L_DEBUG, "Switching to mode `%s'",mode->name);
+	if ((config->reading && argc > 1) || (!config->reading && argc == 1)) {
+		sway_log(SWAY_DEBUG, "Switching to mode `%s' (pango=%d)",
+				mode->name, mode->pango);
 	}
 	// Set current mode
 	config->current_mode = mode;
-	if (!mode_make) {
+	if (argc == 1) {
 		// trigger IPC mode event
-		ipc_event_mode(config->current_mode->name);
+		ipc_event_mode(config->current_mode->name,
+				config->current_mode->pango);
+		return cmd_results_new(CMD_SUCCESS, NULL);
 	}
-	return cmd_results_new(mode_make ? CMD_BLOCK_MODE : CMD_SUCCESS, NULL, NULL);
+
+	// Create binding
+	struct cmd_results *result = config_subcommand(argv + 1, argc - 1,
+			mode_handlers, sizeof(mode_handlers));
+	config->current_mode = config->modes->items[0];
+
+	return result;
 }

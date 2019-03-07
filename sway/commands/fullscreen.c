@@ -1,60 +1,62 @@
-#include <stdbool.h>
-#include <string.h>
-#include <wlc/wlc.h>
+#include <strings.h>
+#include "log.h"
 #include "sway/commands.h"
-#include "sway/container.h"
-#include "sway/focus.h"
-#include "sway/ipc-server.h"
-#include "sway/layout.h"
+#include "sway/config.h"
+#include "sway/tree/arrange.h"
+#include "sway/tree/container.h"
+#include "sway/tree/view.h"
+#include "sway/tree/workspace.h"
+#include "util.h"
 
+// fullscreen [enable|disable|toggle] [global]
 struct cmd_results *cmd_fullscreen(int argc, char **argv) {
 	struct cmd_results *error = NULL;
-	if (config->reading) return cmd_results_new(CMD_FAILURE, "fullscreen", "Can't be used in config file.");
-	if (!config->active) return cmd_results_new(CMD_FAILURE, "fullscreen", "Can only be used when sway is running.");
-	if ((error = checkarg(argc, "fullscreen", EXPECTED_AT_LEAST, 0))) {
+	if ((error = checkarg(argc, "fullscreen", EXPECTED_AT_MOST, 2))) {
 		return error;
 	}
-	swayc_t *container = current_container;
-	if(container->type != C_VIEW){
-		return cmd_results_new(CMD_INVALID, "fullscreen", "Only views can fullscreen");
+	if (!root->outputs->length) {
+		return cmd_results_new(CMD_FAILURE,
+				"Can't run this command while there's no outputs connected.");
 	}
-	swayc_t *workspace = swayc_parent_by_type(container, C_WORKSPACE);
-	bool current = swayc_is_fullscreen(container);
-	wlc_view_set_state(container->handle, WLC_BIT_FULLSCREEN, !current);
+	struct sway_node *node = config->handler_context.node;
+	struct sway_container *container = config->handler_context.container;
+	struct sway_workspace *workspace = config->handler_context.workspace;
+	if (node->type == N_WORKSPACE && workspace->tiling->length == 0) {
+		return cmd_results_new(CMD_FAILURE,
+				"Can't fullscreen an empty workspace");
+	}
 
-	if (container->is_floating) {
-		if (current) {
-			// set dimensions back to what they were before we fullscreened this
-			container->x = container->cached_geometry.origin.x;
-			container->y = container->cached_geometry.origin.y;
-			container->width = container->cached_geometry.size.w;
-			container->height = container->cached_geometry.size.h;
+	bool is_fullscreen = container &&
+		container->fullscreen_mode != FULLSCREEN_NONE;
+	bool global = false;
+	bool enable = !is_fullscreen;
+
+	if (argc >= 1) {
+		if (strcasecmp(argv[0], "global") == 0) {
+			global = true;
 		} else {
-			// cache dimensions so we can reset them after we "unfullscreen" this
-			struct wlc_geometry geo = {
-				.origin = {
-					.x = container->x,
-					.y = container->y
-				},
-				.size = {
-					.w = container->width,
-					.h = container->height
-				}
-			};
-			container->cached_geometry = geo;
+			enable = parse_boolean(argv[0], is_fullscreen);
 		}
 	}
 
-	// Resize workspace if going from  fullscreen -> notfullscreen
-	// otherwise just resize container
-	if (!current) {
-		arrange_windows(workspace, -1, -1);
-		workspace->fullscreen = container;
-	} else {
-		arrange_windows(container, -1, -1);
-		workspace->fullscreen = NULL;
+	if (argc >= 2) {
+		global = strcasecmp(argv[1], "global") == 0;
 	}
-	ipc_event_window(container, "fullscreen_mode");
 
-	return cmd_results_new(CMD_SUCCESS, NULL, NULL);
+	if (enable && node->type == N_WORKSPACE) {
+		// Wrap the workspace's children in a container so we can fullscreen it
+		container = workspace_wrap_children(workspace);
+		workspace->layout = L_HORIZ;
+		seat_set_focus_container(config->handler_context.seat, container);
+	}
+
+	enum sway_fullscreen_mode mode = FULLSCREEN_NONE;
+	if (enable) {
+		mode = global ? FULLSCREEN_GLOBAL : FULLSCREEN_WORKSPACE;
+	}
+
+	container_set_fullscreen(container, mode);
+	arrange_root();
+
+	return cmd_results_new(CMD_SUCCESS, NULL);
 }

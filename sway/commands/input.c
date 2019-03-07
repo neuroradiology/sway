@@ -1,8 +1,43 @@
 #include <string.h>
 #include <strings.h>
 #include "sway/commands.h"
-#include "sway/input.h"
+#include "sway/input/input-manager.h"
 #include "log.h"
+#include "stringop.h"
+
+// must be in order for the bsearch
+static struct cmd_handler input_handlers[] = {
+	{ "accel_profile", input_cmd_accel_profile },
+	{ "click_method", input_cmd_click_method },
+	{ "drag", input_cmd_drag },
+	{ "drag_lock", input_cmd_drag_lock },
+	{ "dwt", input_cmd_dwt },
+	{ "events", input_cmd_events },
+	{ "left_handed", input_cmd_left_handed },
+	{ "map_from_region", input_cmd_map_from_region },
+	{ "map_to_output", input_cmd_map_to_output },
+	{ "middle_emulation", input_cmd_middle_emulation },
+	{ "natural_scroll", input_cmd_natural_scroll },
+	{ "pointer_accel", input_cmd_pointer_accel },
+	{ "repeat_delay", input_cmd_repeat_delay },
+	{ "repeat_rate", input_cmd_repeat_rate },
+	{ "scroll_button", input_cmd_scroll_button },
+	{ "scroll_factor", input_cmd_scroll_factor },
+	{ "scroll_method", input_cmd_scroll_method },
+	{ "tap", input_cmd_tap },
+	{ "tap_button_map", input_cmd_tap_button_map },
+	{ "xkb_layout", input_cmd_xkb_layout },
+	{ "xkb_model", input_cmd_xkb_model },
+	{ "xkb_options", input_cmd_xkb_options },
+	{ "xkb_rules", input_cmd_xkb_rules },
+	{ "xkb_variant", input_cmd_xkb_variant },
+};
+
+// must be in order for the bsearch
+static struct cmd_handler input_config_handlers[] = {
+	{ "xkb_capslock", input_cmd_xkb_capslock },
+	{ "xkb_numlock", input_cmd_xkb_numlock },
+};
 
 struct cmd_results *cmd_input(int argc, char **argv) {
 	struct cmd_results *error = NULL;
@@ -10,46 +45,39 @@ struct cmd_results *cmd_input(int argc, char **argv) {
 		return error;
 	}
 
-	if (config->reading && strcmp("{", argv[1]) == 0) {
-		current_input_config = new_input_config(argv[0]);
-		sway_log(L_DEBUG, "entering input block: %s", current_input_config->identifier);
-		return cmd_results_new(CMD_BLOCK_INPUT, NULL, NULL);
+	sway_log(SWAY_DEBUG, "entering input block: %s", argv[0]);
+
+	config->handler_context.input_config = new_input_config(argv[0]);
+	if (!config->handler_context.input_config) {
+		return cmd_results_new(CMD_FAILURE, "Couldn't allocate config");
 	}
 
-	if (argc > 2) {
-		int argc_new = argc-2;
-		char **argv_new = argv+2;
+	struct cmd_results *res;
 
-		struct cmd_results *res;
-		current_input_config = new_input_config(argv[0]);
-		if (strcasecmp("accel_profile", argv[1]) == 0) {
-			res = input_cmd_accel_profile(argc_new, argv_new);
-		} else if (strcasecmp("click_method", argv[1]) == 0) {
-			res = input_cmd_click_method(argc_new, argv_new);
-		} else if (strcasecmp("drag_lock", argv[1]) == 0) {
-			res = input_cmd_drag_lock(argc_new, argv_new);
-		} else if (strcasecmp("dwt", argv[1]) == 0) {
-			res = input_cmd_dwt(argc_new, argv_new);
-		} else if (strcasecmp("events", argv[1]) == 0) {
-			res = input_cmd_events(argc_new, argv_new);
-		} else if (strcasecmp("left_handed", argv[1]) == 0) {
-			res = input_cmd_left_handed(argc_new, argv_new);
-		} else if (strcasecmp("middle_emulation", argv[1]) == 0) {
-			res = input_cmd_middle_emulation(argc_new, argv_new);
-		} else if (strcasecmp("natural_scroll", argv[1]) == 0) {
-			res = input_cmd_natural_scroll(argc_new, argv_new);
-		} else if (strcasecmp("pointer_accel", argv[1]) == 0) {
-			res = input_cmd_pointer_accel(argc_new, argv_new);
-		} else if (strcasecmp("scroll_method", argv[1]) == 0) {
-			res = input_cmd_scroll_method(argc_new, argv_new);
-		} else if (strcasecmp("tap", argv[1]) == 0) {
-			res = input_cmd_tap(argc_new, argv_new);
+	if (find_handler(argv[1], input_config_handlers,
+			sizeof(input_config_handlers))) {
+		if (config->reading) {
+			res = config_subcommand(argv + 1, argc - 1,
+				input_config_handlers, sizeof(input_config_handlers));
 		} else {
-			res = cmd_results_new(CMD_INVALID, "input <device>", "Unknown command %s", argv[1]);
+			res = cmd_results_new(CMD_FAILURE,
+				"Can only be used in config file.");
 		}
-		current_input_config = NULL;
-		return res;
+	} else {
+		res = config_subcommand(argv + 1, argc - 1,
+			input_handlers, sizeof(input_handlers));
 	}
 
-	return cmd_results_new(CMD_BLOCK_INPUT, NULL, NULL);
+	if (!res || res->status == CMD_SUCCESS) {
+		struct input_config *ic =
+			store_input_config(config->handler_context.input_config);
+
+		input_manager_apply_input_config(ic);
+	} else {
+		free_input_config(config->handler_context.input_config);
+	}
+
+	config->handler_context.input_config = NULL;
+
+	return res;
 }

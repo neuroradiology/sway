@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "log.h"
 
 list_t *create_list(void) {
 	list_t *list = malloc(sizeof(list_t));
@@ -16,7 +17,7 @@ list_t *create_list(void) {
 
 static void list_resize(list_t *list) {
 	if (list->length == list->capacity) {
-		list->capacity += 10;
+		list->capacity *= 2;
 		list->items = realloc(list->items, sizeof(void*) * list->capacity);
 	}
 }
@@ -27,15 +28,6 @@ void list_free(list_t *list) {
 	}
 	free(list->items);
 	free(list);
-}
-
-void list_foreach(list_t *list, void (*callback)(void *item)) {
-	if (list == NULL || callback == NULL) {
-		return;
-	}
-	for (int i = 0; i < list->length; i++) {
-		callback(list->items[i]);
-	}
 }
 
 void list_add(list_t *list, void *item) {
@@ -56,8 +48,7 @@ void list_del(list_t *list, int index) {
 }
 
 void list_cat(list_t *list, list_t *source) {
-	int i;
-	for (i = 0; i < source->length; ++i) {
+	for (int i = 0; i < source->length; ++i) {
 		list_add(list, source->items[i]);
 	}
 }
@@ -76,10 +67,33 @@ int list_seq_find(list_t *list, int compare(const void *item, const void *data),
 	return -1;
 }
 
+int list_find(list_t *list, const void *item) {
+	for (int i = 0; i < list->length; i++) {
+		if (list->items[i] == item) {
+			return i;
+		}
+	}
+	return -1;
+}
+
 void list_swap(list_t *list, int src, int dest) {
 	void *tmp = list->items[src];
 	list->items[src] = list->items[dest];
 	list->items[dest] = tmp;
+}
+
+void list_move_to_end(list_t *list, void *item) {
+	int i;
+	for (i = 0; i < list->length; ++i) {
+		if (list->items[i] == item) {
+			break;
+		}
+	}
+	if (!sway_assert(i < list->length, "Item not found in list")) {
+		return;
+	}
+	list_del(list, i);
+	list_add(list, item);
 }
 
 static void list_rotate(list_t *list, int from, int to) {
@@ -132,3 +146,15 @@ void list_stable_sort(list_t *list, int compare(const void *a, const void *b)) {
 		list_inplace_sort(list, 0, list->length - 1, compare);
 	}
 }
+
+void list_free_items_and_destroy(list_t *list) {
+	if (!list) {
+		return;
+	}
+
+	for (int i = 0; i < list->length; ++i) {
+		free(list->items[i]);
+	}
+	list_free(list);
+}
+

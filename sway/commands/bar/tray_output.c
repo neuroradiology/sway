@@ -1,29 +1,42 @@
-#define _XOPEN_SOURCE 500
+#define _POSIX_C_SOURCE 200809L
 #include <string.h>
+#include "config.h"
 #include "sway/commands.h"
+#include "sway/config.h"
+#include "list.h"
+#include "log.h"
 
 struct cmd_results *bar_cmd_tray_output(int argc, char **argv) {
-	const char *cmd_name = "tray_output";
-#ifndef ENABLE_TRAY
-	return cmd_results_new(CMD_INVALID, cmd_name, "Invalid %s command "
-			"%s called, but sway was compiled without tray support",
-			cmd_name, cmd_name);
-#else
+#if HAVE_TRAY
 	struct cmd_results *error = NULL;
-	if ((error = checkarg(argc, cmd_name, EXPECTED_EQUAL_TO, 1))) {
+	if ((error = checkarg(argc, "tray_output", EXPECTED_EQUAL_TO, 1))) {
 		return error;
 	}
 
 	if (!config->current_bar) {
-		return cmd_results_new(CMD_FAILURE, cmd_name, "No bar defined.");
+		return cmd_results_new(CMD_FAILURE, "No bar defined.");
 	}
 
-	if (strcmp(argv[0], "all") == 0) {
-		// Default behaviour
-		return cmd_results_new(CMD_SUCCESS, NULL, NULL);
+	list_t *outputs = config->current_bar->tray_outputs;
+	if (!outputs) {
+		config->current_bar->tray_outputs = outputs = create_list();
 	}
-	config->current_bar->tray_output = strdup(argv[0]);
 
-	return cmd_results_new(CMD_SUCCESS, NULL, NULL);
+	if (strcmp(argv[0], "none") == 0) {
+		sway_log(SWAY_DEBUG, "Hiding tray on bar: %s", config->current_bar->id);
+		for (int i = 0; i < outputs->length; ++i) {
+			free(outputs->items[i]);
+		}
+		outputs->length = 0;
+	} else {
+		sway_log(SWAY_DEBUG, "Showing tray on output '%s' for bar: %s", argv[0],
+				config->current_bar->id);
+	}
+	list_add(outputs, strdup(argv[0]));
+
+	return cmd_results_new(CMD_SUCCESS, NULL);
+#else
+	return cmd_results_new(CMD_INVALID,
+			"Sway has been compiled without tray support");
 #endif
 }

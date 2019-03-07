@@ -1,4 +1,4 @@
-#define _XOPEN_SOURCE 500
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,22 +8,14 @@
 #include "ipc-client.h"
 #include "log.h"
 
-/* global bar state */
-struct bar swaybar;
-
-void sway_terminate(int exit_code) {
-	bar_teardown(&swaybar);
-	exit(exit_code);
-}
+static struct swaybar swaybar;
 
 void sig_handler(int signal) {
-	bar_teardown(&swaybar);
-	exit(0);
+	swaybar.running = false;
 }
 
 int main(int argc, char **argv) {
 	char *socket_path = NULL;
-	char *bar_id = NULL;
 	bool debug = false;
 
 	static struct option long_options[] = {
@@ -60,10 +52,10 @@ int main(int argc, char **argv) {
 			socket_path = strdup(optarg);
 			break;
 		case 'b': // Type
-			bar_id = strdup(optarg);
+			swaybar.id = strdup(optarg);
 			break;
 		case 'v':
-			fprintf(stdout, "sway version " SWAY_VERSION "\n");
+			fprintf(stdout, "swaybar version " SWAY_VERSION "\n");
 			exit(EXIT_SUCCESS);
 			break;
 		case 'd': // Debug
@@ -75,34 +67,38 @@ int main(int argc, char **argv) {
 		}
 	}
 
-	if (!bar_id) {
-		sway_abort("No bar_id passed. Provide --bar_id or let sway start swaybar");
+	if (debug) {
+		sway_log_init(SWAY_DEBUG, NULL);
+	} else {
+		sway_log_init(SWAY_INFO, NULL);
 	}
 
-	if (debug) {
-		init_log(L_DEBUG);
-	} else {
-		init_log(L_ERROR);
+	if (!swaybar.id) {
+		sway_log(SWAY_ERROR, "No bar_id passed. "
+				"Provide --bar_id or let sway start swaybar");
+		return 1;
 	}
 
 	if (!socket_path) {
 		socket_path = get_socketpath();
 		if (!socket_path) {
-			sway_abort("Unable to retrieve socket path");
+			sway_log(SWAY_ERROR, "Unable to retrieve socket path");
+			return 1;
 		}
 	}
 
-	signal(SIGTERM, sig_handler);
-
-	bar_setup(&swaybar, socket_path, bar_id);
+	if (!bar_setup(&swaybar, socket_path)) {
+		free(socket_path);
+		return 1;
+	}
 
 	free(socket_path);
-	free(bar_id);
 
+	signal(SIGINT, sig_handler);
+	signal(SIGTERM, sig_handler);
+
+	swaybar.running = true;
 	bar_run(&swaybar);
-
-	// gracefully shutdown swaybar and status_command
 	bar_teardown(&swaybar);
-
 	return 0;
 }

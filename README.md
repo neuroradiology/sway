@@ -1,46 +1,21 @@
-# sway [![](https://api.travis-ci.org/swaywm/sway.svg)](https://travis-ci.org/swaywm/sway) [![Donate with fosspay](https://drewdevault.com/donate/static/donate-with-fosspay.png)](https://drewdevault.com/donate?project=4)
+# sway
 
 [**English**](https://github.com/swaywm/sway/blob/master/README.md#sway--) - [日本語](https://github.com/swaywm/sway/blob/master/README.ja.md#sway--) - [Deutsch](https://github.com/swaywm/sway/blob/master/README.de.md#sway--) - [Ελληνικά](https://github.com/swaywm/sway/blob/master/README.el.md#sway--) - [Français](https://github.com/swaywm/sway/blob/master/README.fr.md#sway--) - [Українська](https://github.com/swaywm/sway/blob/master/README.uk.md#sway--) - [Italiano](https://github.com/swaywm/sway/blob/master/README.it.md#sway--) - [Português](https://github.com/swaywm/sway/blob/master/README.pt.md#sway--) -
-[Русский](https://github.com/swaywm/sway/blob/master/README.ru.md#sway--)
+[Русский](https://github.com/swaywm/sway/blob/master/README.ru.md#sway--) - [Български](https://github.com/swaywm/sway/blob/master/README.bg.md#sway--) - [Español](https://github.com/swaywm/sway/blob/master/README.es.md#sway--) -
+[Polski](https://github.com/swaywm/sway/blob/master/README.pl.md#sway--)
 
-"**S**irCmpwn's **Way**land compositor" is a **work in progress**
-i3-compatible [Wayland](http://wayland.freedesktop.org/) compositor.
-Read the [FAQ](https://github.com/swaywm/sway/wiki). Join the
-[IRC channel](http://webchat.freenode.net/?channels=sway&uio=d4) (#sway on
+sway is an i3-compatible [Wayland](http://wayland.freedesktop.org/) compositor.
+Read the [FAQ](https://github.com/swaywm/sway/wiki). Join the [IRC
+channel](http://webchat.freenode.net/?channels=sway&uio=d4) (#sway on
 irc.freenode.net).
 
-**Notice**: Sway is currently *frozen* and no new features are being shipped
-until we finish integrating Sway and wlroots. Bug fixes are still going out.
-for more information, [see this
-article](https://drewdevault.com/2017/10/09/Future-of-sway.html). To follow
-wlroots integration status, [see this
-ticket](https://github.com/swaywm/sway/issues/1390).
-
-**2018-02-18**: We are fundraising for a hackathon to complete the work
-integrating wlroots and Sway! Please [consider
-contributing](https://www.indiegogo.com/projects/sway-hackathon-software/x/1059863).
-
-[![](https://sr.ht/ICd5.png)](https://sr.ht/ICd5.png)
-
-If you'd like to support Sway development, you can contribute to [SirCmpwn's
-Patreon page](https://patreon.com/sircmpwn) or you can contribute to
-[bounties](https://github.com/swaywm/sway/issues/986) for specific features.
-Anyone is welcome to claim a bounty and you can make a bounty for any feature
-you wish, and Patreon is more useful for supporting the overall health and
-maintenance of Sway.
+If you'd like to support sway development, please contribute to [SirCmpwn's
+Patreon page](https://patreon.com/sircmpwn).
 
 ## Release Signatures
 
 Releases are signed with [B22DA89A](http://pgp.mit.edu/pks/lookup?op=vindex&search=0x52CB6609B22DA89A)
 and published [on GitHub](https://github.com/swaywm/sway/releases).
-
-## Status
-
-- [i3 feature support](https://github.com/swaywm/sway/issues/2)
-- [IPC feature support](https://github.com/swaywm/sway/issues/98)
-- [i3bar feature support](https://github.com/swaywm/sway/issues/343)
-- [i3-gaps feature support](https://github.com/swaywm/sway/issues/307)
-- [security features](https://github.com/swaywm/sway/issues/984)
 
 ## Installation
 
@@ -50,51 +25,40 @@ Sway is available in many distributions. Try installing the "sway" package for
 yours. If it's not available, check out [this wiki page](https://github.com/swaywm/sway/wiki/Unsupported-packages)
 for information on installation for your distributions.
 
-If you're interested in packaging Sway for your distribution, stop by the IRC
+If you're interested in packaging sway for your distribution, stop by the IRC
 channel or shoot an email to sir@cmpwn.com for advice.
 
 ### Compiling from Source
 
 Install dependencies:
 
-* cmake
-* [wlc](https://github.com/Cloudef/wlc)
+* meson \*
+* [wlroots](https://github.com/swaywm/wlroots)
 * wayland
-* xwayland
-* libinput >= 1.6.0
-* libcap
-* asciidoc
+* wayland-protocols \*
 * pcre
-* json-c <= 0.12.1
+* json-c
 * pango
 * cairo
-* gdk-pixbuf2 *
-* pam **
-* dbus >= 1.10 ***
-* imagemagick (required for image capture with swaygrab)
-* ffmpeg (required for video capture with swaygrab)
+* gdk-pixbuf2 \*\*
+* [scdoc](https://git.sr.ht/~sircmpwn/scdoc) (optional: man pages) \*
+* git \*
 
-_\*Only required for swaybar, swaybg, and swaylock_
+_\*Compile-time dep_
 
-_\*\*Only required for swaylock_
-
-_\*\*\*Only required for tray support_
+_\*\*optional: required for swaybg_
 
 Run these commands:
 
-    mkdir build
-    cd build
-    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_SYSCONFDIR=/etc ..
-    make
-    sudo make install
-
-On systems with logind, you need to set a few caps on the binary:
-
-    sudo setcap "cap_sys_ptrace,cap_sys_tty_config=eip" /usr/local/bin/sway
+    meson build
+    ninja -C build
+    sudo ninja -C build install
 
 On systems without logind, you need to suid the sway binary:
 
     sudo chmod a+s /usr/local/bin/sway
+
+Sway will drop root permissions shortly after startup.
 
 ## Configuration
 
@@ -106,4 +70,4 @@ Run `man 5 sway` for information on the configuration.
 ## Running
 
 Run `sway` from a TTY. Some display managers may work but are not supported by
-Sway (gdm is known to work fairly well).
+sway (gdm is known to work fairly well).

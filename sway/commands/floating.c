@@ -1,81 +1,51 @@
 #include <string.h>
 #include <strings.h>
 #include "sway/commands.h"
-#include "sway/container.h"
+#include "sway/input/seat.h"
 #include "sway/ipc-server.h"
-#include "sway/layout.h"
+#include "sway/output.h"
+#include "sway/tree/arrange.h"
+#include "sway/tree/container.h"
+#include "sway/tree/view.h"
+#include "sway/tree/workspace.h"
 #include "list.h"
-#include "log.h"
+#include "util.h"
 
 struct cmd_results *cmd_floating(int argc, char **argv) {
 	struct cmd_results *error = NULL;
-	if (config->reading) return cmd_results_new(CMD_FAILURE, "floating", "Can't be used in config file.");
 	if ((error = checkarg(argc, "floating", EXPECTED_EQUAL_TO, 1))) {
 		return error;
 	}
-	swayc_t *view = current_container;
-	bool wants_floating;
-	if (strcasecmp(argv[0], "enable") == 0) {
-		wants_floating = true;
-	} else if (strcasecmp(argv[0], "disable") == 0) {
-		wants_floating = false;
-	} else if (strcasecmp(argv[0], "toggle") == 0) {
-		wants_floating = !view->is_floating;
-	} else {
-		return cmd_results_new(CMD_FAILURE, "floating",
-			"Expected 'floating <enable|disable|toggle>");
+	if (!root->outputs->length) {
+		return cmd_results_new(CMD_INVALID,
+				"Can't run this command while there's no outputs connected.");
+	}
+	struct sway_container *container = config->handler_context.container;
+	struct sway_workspace *workspace = config->handler_context.workspace;
+	if (!container && workspace->tiling->length == 0) {
+		return cmd_results_new(CMD_INVALID, "Can't float an empty workspace");
+	}
+	if (!container) {
+		// Wrap the workspace's children in a container so we can float it
+		container = workspace_wrap_children(workspace);
+		workspace->layout = L_HORIZ;
+		seat_set_focus_container(config->handler_context.seat, container);
 	}
 
-	// Prevent running floating commands on things like workspaces
-	if (view->type != C_VIEW) {
-		return cmd_results_new(CMD_SUCCESS, NULL, NULL);
+	// If the container is in a floating split container,
+	// operate on the split container instead of the child.
+	if (container_is_floating_or_child(container)) {
+		while (container->parent) {
+			container = container->parent;
+		}
 	}
 
-	// Change from nonfloating to floating
-	if (!view->is_floating && wants_floating) {
-		// Remove view from its current location
-		destroy_container(remove_child(view));
+	bool wants_floating =
+		parse_boolean(argv[0], container_is_floating(container));
 
-		// and move it into workspace floating
-		add_floating(swayc_active_workspace(), view);
-		view->x = (swayc_active_workspace()->width - view->width)/2;
-		view->y = (swayc_active_workspace()->height - view->height)/2;
-		if (view->desired_width != -1) {
-			view->width = view->desired_width;
-		}
-		if (view->desired_height != -1) {
-			view->height = view->desired_height;
-		}
-		arrange_windows(swayc_active_workspace(), -1, -1);
+	container_set_floating(container, wants_floating);
 
-	} else if (view->is_floating && !wants_floating) {
-		// Delete the view from the floating list and unset its is_floating flag
-		remove_child(view);
-		view->is_floating = false;
-		// Get the properly focused container, and add in the view there
-		swayc_t *focused = container_under_pointer();
-		// If focused is null, it's because the currently focused container is a workspace
-		if (focused == NULL || focused->is_floating) {
-			focused = swayc_active_workspace();
-		}
-		set_focused_container(focused);
+	arrange_workspace(container->workspace);
 
-		sway_log(L_DEBUG, "Non-floating focused container is %p", focused);
-
-		// Case of focused workspace, just create as child of it
-		if (focused->type == C_WORKSPACE) {
-			add_child(focused, view);
-		}
-		// Regular case, create as sibling of current container
-		else {
-			add_sibling(focused, view);
-		}
-		// Refocus on the view once its been put back into the layout
-		view->width = view->height = 0;
-		arrange_windows(swayc_active_workspace(), -1, -1);
-		remove_view_from_scratchpad(view);
-		ipc_event_window(view, "floating");
-	}
-	set_focused_container(view);
-	return cmd_results_new(CMD_SUCCESS, NULL, NULL);
+	return cmd_results_new(CMD_SUCCESS, NULL);
 }

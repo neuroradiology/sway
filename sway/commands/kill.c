@@ -1,12 +1,31 @@
+#include "log.h"
+#include "sway/input/input-manager.h"
+#include "sway/input/seat.h"
+#include "sway/tree/container.h"
+#include "sway/tree/view.h"
+#include "sway/tree/workspace.h"
 #include "sway/commands.h"
-#include "sway/container.h"
-#include "sway/focus.h"
+
+static void close_container_iterator(struct sway_container *con, void *data) {
+	if (con->view) {
+		view_close(con->view);
+	}
+}
 
 struct cmd_results *cmd_kill(int argc, char **argv) {
-	if (config->reading) return cmd_results_new(CMD_FAILURE, "kill", "Can't be used in config file.");
-	if (!config->active) return cmd_results_new(CMD_FAILURE, "kill", "Can only be used when sway is running.");
+	if (!root->outputs->length) {
+		return cmd_results_new(CMD_INVALID,
+				"Can't run this command while there's no outputs connected.");
+	}
+	struct sway_container *con = config->handler_context.container;
+	struct sway_workspace *ws = config->handler_context.workspace;
 
-	swayc_t *container = current_container;
-	close_views(container);
-	return cmd_results_new(CMD_SUCCESS, NULL, NULL);
+	if (con) {
+		close_container_iterator(con, NULL);
+		container_for_each_child(con, close_container_iterator, NULL);
+	} else {
+		workspace_for_each_container(ws, close_container_iterator, NULL);
+	}
+
+	return cmd_results_new(CMD_SUCCESS, NULL);
 }

@@ -1,400 +1,469 @@
-#define _XOPEN_SOURCE 700
 #define _POSIX_C_SOURCE 200809L
+#include <ctype.h>
+#include <dirent.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <string.h>
-#include <dirent.h>
 #include <sys/stat.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <limits.h>
+#include <unistd.h>
+#include <wordexp.h>
 #include "swaybar/tray/icon.h"
-#include "swaybar/bar.h"
-#include "swaybar/config.h"
-#include "stringop.h"
+#include "config.h"
+#include "list.h"
 #include "log.h"
+#include "stringop.h"
 
-/**
- * REVIEW:
- * This file repeats lots of "costly" operations that are the same for every
- * icon. It's possible to create a dictionary or some other structure to cache
- * these, though it may complicate things somewhat.
- *
- * Also parsing (index.theme) is currently pretty messy, so that could be made
- * much better as well. Over all, things work, but are not optimal.
- */
-
-/* Finds all themes that the given theme inherits */
-static list_t *find_inherits(const char *theme_dir) {
-	const char inherits[] = "Inherits";
-	const char index_name[] = "index.theme";
-	list_t *themes = create_list();
-	FILE *index = NULL;
-	char *path = malloc(strlen(theme_dir) + sizeof(index_name));
-	if (!path) {
-		goto fail;
-	}
-	if (!themes) {
-		goto fail;
-	}
-
-	strcpy(path, theme_dir);
-	strcat(path, index_name);
-
-	index = fopen(path, "r");
-	if (!index) {
-		goto fail;
-	}
-
-	char *buf = NULL;
-	size_t n = 0;
-	while (!feof(index) && getline(&buf, &n, index) != -1) {
-		if (n <= sizeof(inherits) + 1) {
-			continue;
-		}
-		if (strncmp(inherits, buf, sizeof(inherits) - 1) == 0) {
-			char *themestr = buf + sizeof(inherits);
-			themes = split_string(themestr, ",");
-			break;
-		}
-	}
-	free(buf);
-
-fail:
-	free(path);
-	if (index) {
-		fclose(index);
-	}
-	return themes;
+static bool dir_exists(char *path) {
+	struct stat sb;
+	return stat(path, &sb) == 0 && S_ISDIR(sb.st_mode);
 }
 
-static bool isdir(const char *path) {
-	struct stat statbuf;
-	if (stat(path, &statbuf) != -1) {
-		if (S_ISDIR(statbuf.st_mode)) {
+static list_t *get_basedirs(void) {
+	list_t *basedirs = create_list();
+	list_add(basedirs, strdup("$HOME/.icons")); // deprecated
+
+	char *data_home = getenv("XDG_DATA_HOME");
+	list_add(basedirs, strdup(data_home && *data_home ?
+			"$XDG_DATA_HOME/icons" : "$HOME/.local/share/icons"));
+
+	list_add(basedirs, strdup("/usr/share/pixmaps"));
+
+	char *data_dirs = getenv("XDG_DATA_DIRS");
+	if (!(data_dirs && *data_dirs)) {
+		data_dirs = "/usr/local/share:/usr/share";
+	}
+	data_dirs = strdup(data_dirs);
+	char *dir = strtok(data_dirs, ":");
+	do {
+		size_t path_len = snprintf(NULL, 0, "%s/icons", dir) + 1;
+		char *path = malloc(path_len);
+		snprintf(path, path_len, "%s/icons", dir);
+		list_add(basedirs, path);
+	} while ((dir = strtok(NULL, ":")));
+	free(data_dirs);
+
+	list_t *basedirs_expanded = create_list();
+	for (int i = 0; i < basedirs->length; ++i) {
+		wordexp_t p;
+		if (wordexp(basedirs->items[i], &p, WRDE_UNDEF) == 0) {
+			if (dir_exists(p.we_wordv[0])) {
+				list_add(basedirs_expanded, strdup(p.we_wordv[0]));
+			}
+			wordfree(&p);
+		}
+	}
+
+	list_free_items_and_destroy(basedirs);
+
+	return basedirs_expanded;
+}
+
+static void destroy_theme(struct icon_theme *theme) {
+	if (!theme) {
+		return;
+	}
+	free(theme->name);
+	free(theme->comment);
+	free(theme->inherits);
+	list_free_items_and_destroy(theme->directories);
+	free(theme->dir);
+
+	for (int i = 0; i < theme->subdirs->length; ++i) {
+		struct icon_theme_subdir *subdir = theme->subdirs->items[i];
+		free(subdir->name);
+		free(subdir);
+	}
+	list_free(theme->subdirs);
+	free(theme);
+}
+
+static int cmp_group(const void *item, const void *cmp_to) {
+	return strcmp(item, cmp_to);
+}
+
+static bool group_handler(char *old_group, char *new_group,
+		struct icon_theme *theme) {
+	if (!old_group) { // first group must be "Icon Theme"
+		return strcmp(new_group, "Icon Theme");
+	}
+
+	if (strcmp(old_group, "Icon Theme") == 0) {
+		if (!(theme->name && theme->comment && theme->directories)) {
 			return true;
 		}
-	}
-	return false;
+	} else {
+		if (theme->subdirs->length == 0) { // skip
+			return false;
+		}
 
+		struct icon_theme_subdir *subdir =
+			theme->subdirs->items[theme->subdirs->length - 1];
+		if (!subdir->size) return true;
+
+		switch (subdir->type) {
+		case FIXED: subdir->max_size = subdir->min_size = subdir->size;
+			break;
+		case SCALABLE: {
+			if (!subdir->max_size) subdir->max_size = subdir->size;
+			if (!subdir->min_size) subdir->min_size = subdir->size;
+			break;
+		}
+		case THRESHOLD:
+			subdir->max_size = subdir->size + subdir->threshold;
+			subdir->min_size = subdir->size - subdir->threshold;
+		}
+	}
+
+	if (new_group && list_seq_find(theme->directories, cmp_group, new_group) != -1) {
+		struct icon_theme_subdir *subdir = calloc(1, sizeof(struct icon_theme_subdir));
+		if (!subdir) {
+			return true;
+		}
+		subdir->name = strdup(new_group);
+		subdir->threshold = 2;
+		list_add(theme->subdirs, subdir);
+	}
+
+	return false;
 }
 
-/**
- * Returns the directory of a given theme if it exists.
- * The returned pointer must be freed.
- */
-static char *find_theme_dir(const char *theme) {
-	char *basedir;
-	char *icon_dir;
+static int entry_handler(char *group, char *key, char *value,
+		struct icon_theme *theme) {
+	if (strcmp(group, "Icon Theme") == 0) {
+		if (strcmp(key, "Name") == 0) {
+			theme->name = strdup(value);
+		} else if (strcmp(key, "Comment") == 0) {
+			theme->comment = strdup(value);
+		} else if (strcmp(key, "Inherits") == 0) {
+			theme->inherits = strdup(value);
+		} else if (strcmp(key, "Directories") == 0) {
+			theme->directories = split_string(value, ",");
+		} // Ignored: ScaledDirectories, Hidden, Example
+	} else {
+		if (theme->subdirs->length == 0) { // skip
+			return false;
+		}
 
+		struct icon_theme_subdir *subdir =
+			theme->subdirs->items[theme->subdirs->length - 1];
+		if (strcmp(subdir->name, group) != 0) { // skip
+			return false;
+		}
+
+		char *end;
+		int n = strtol(value, &end, 10);
+		if (strcmp(key, "Size") == 0) {
+			subdir->size = n;
+			return *end != '\0';
+		} else if (strcmp(key, "Type") == 0) {
+			if (strcmp(value, "Fixed") == 0) {
+				subdir->type = FIXED;
+			} else if (strcmp(value, "Scalable") == 0) {
+				subdir->type = SCALABLE;
+			} else if (strcmp(value, "Threshold") == 0) {
+				subdir->type = THRESHOLD;
+			} else {
+				return true;
+			}
+		} else if (strcmp(key, "MaxSize") == 0) {
+			subdir->max_size = n;
+			return *end != '\0';
+		} else if (strcmp(key, "MinSize") == 0) {
+			subdir->min_size = n;
+			return *end != '\0';
+		} else if (strcmp(key, "Threshold") == 0) {
+			subdir->threshold = n;
+			return *end != '\0';
+		} // Ignored: Scale, Applications
+	}
+	return false;
+}
+
+/*
+ * This is a Freedesktop Desktop Entry parser (essentially INI)
+ * It calls entry_handler for every entry
+ * and group_handler between every group (as well as at both ends)
+ * Handlers return whether an error occured, which stops parsing
+ */
+static struct icon_theme *read_theme_file(char *basedir, char *theme_name) {
+	// look for index.theme file
+	size_t path_len = snprintf(NULL, 0, "%s/%s/index.theme", basedir,
+			theme_name) + 1;
+	char *path = malloc(path_len);
+	if (!path) {
+		return NULL;
+	}
+	snprintf(path, path_len, "%s/%s/index.theme", basedir, theme_name);
+	FILE *theme_file = fopen(path, "r");
+	free(path);
+	if (!theme_file) {
+		return NULL;
+	}
+
+	struct icon_theme *theme = calloc(1, sizeof(struct icon_theme));
 	if (!theme) {
 		return NULL;
 	}
+	theme->subdirs = create_list();
 
-	if (!(icon_dir = malloc(1024))) {
-		sway_log(L_ERROR, "Out of memory!");
-		goto fail;
-	}
+	bool error = false;
+	char *group = NULL;
+	char *full_line = NULL;
+	size_t full_len = 0;
+	ssize_t nread;
+	while ((nread = getline(&full_line, &full_len, theme_file)) != -1) {
+		char *line = full_line - 1;
+		while (isspace(*++line)) {} // remove leading whitespace
+		if (!*line || line[0] == '#') continue; // ignore blank lines & comments
 
-	if ((basedir = getenv("HOME"))) {
-		if (snprintf(icon_dir, 1024, "%s/.icons/%s", basedir, theme) >= 1024) {
-			sway_log(L_ERROR, "Path too long to render");
-			// XXX perhaps just goto trying in /usr/share? This
-			// shouldn't happen anyway, but might with a long global
-			goto fail;
+		int len = nread - (line - full_line);
+		while (isspace(line[--len])) {}
+		line[++len] = '\0'; // remove trailing whitespace
+
+		if (line[0] == '[') { // group header
+			// check well-formed
+			if (line[--len] != ']') {
+				error = true;
+				break;
+			}
+			int i = 1;
+			for (; !iscntrl(line[i]) && line[i] != '[' && line[i] != ']'; ++i) {}
+			if (i < len) {
+				error = true;
+				break;
+			}
+
+			// call handler
+			line[len] = '\0';
+			error = group_handler(group, &line[1], theme);
+			if (error) {
+				break;
+			}
+			free(group);
+			group = strdup(&line[1]);
+		} else { // key-value pair
+			// check well-formed
+			int eok = 0;
+			for (; isalnum(line[eok]) || line[eok] == '-'; ++eok) {} // TODO locale?
+			int i = eok - 1;
+			while (isspace(line[++i])) {}
+			if (line[i] != '=') {
+				error = true;
+				break;
+			}
+
+			line[eok] = '\0'; // split into key-value pair
+			char *value = &line[i];
+			while (isspace(*++value)) {}
+			// TODO unescape value
+			error = entry_handler(group, line, value, theme);
+			if (error) {
+				break;
+			}
 		}
+	}
 
-		if (isdir(icon_dir)) {
-			return icon_dir;
+	if (!error && group) {
+		error = group_handler(group, NULL, theme);
+	}
+
+	free(group);
+	free(full_line);
+	fclose(theme_file);
+
+	if (!error) {
+		theme->dir = strdup(theme_name);
+		return theme;
+	} else {
+		destroy_theme(theme);
+		return NULL;
+	}
+}
+
+static list_t *load_themes_in_dir(char *basedir) {
+	DIR *dir;
+	if (!(dir = opendir(basedir))) {
+		return NULL;
+	}
+
+	list_t *themes = create_list();
+	struct dirent *entry;
+	while ((entry = readdir(dir))) {
+		if (entry->d_name[0] == '.') continue;
+
+		struct icon_theme *theme = read_theme_file(basedir, entry->d_name);
+		if (theme) {
+			list_add(themes, theme);
+		}
+	}
+	closedir(dir);
+	return themes;
+}
+
+void init_themes(list_t **themes, list_t **basedirs) {
+	*basedirs = get_basedirs();
+
+	*themes = create_list();
+	for (int i = 0; i < (*basedirs)->length; ++i) {
+		list_t *dir_themes = load_themes_in_dir((*basedirs)->items[i]);
+		list_cat(*themes, dir_themes);
+		list_free(dir_themes);
+	}
+
+	list_t *theme_names = create_list();
+	for (int i = 0; i < (*themes)->length; ++i) {
+		struct icon_theme *theme = (*themes)->items[i];
+		list_add(theme_names, theme->name);
+	}
+	char *theme_list = join_list(theme_names, ", ");
+	sway_log(SWAY_DEBUG, "Loaded themes: %s", theme_list);
+	free(theme_list);
+	list_free(theme_names);
+}
+
+void finish_themes(list_t *themes, list_t *basedirs) {
+	for (int i = 0; i < themes->length; ++i) {
+		destroy_theme(themes->items[i]);
+	}
+	list_free(themes);
+	list_free_items_and_destroy(basedirs);
+}
+
+static char *find_icon_in_subdir(char *name, char *basedir, char *theme,
+		char *subdir) {
+	static const char *extensions[] = {
+#if HAVE_GDK_PIXBUF
+		"svg",
+#endif
+		"png",
+#if HAVE_GDK_PIXBUF
+		"xpm"
+#endif
+	};
+
+	size_t path_len = snprintf(NULL, 0, "%s/%s/%s/%s.EXT", basedir, theme,
+			subdir, name) + 1;
+	char *path = malloc(path_len);
+
+	for (size_t i = 0; i < sizeof(extensions) / sizeof(*extensions); ++i) {
+		snprintf(path, path_len, "%s/%s/%s/%s.%s", basedir, theme, subdir,
+				name, extensions[i]);
+		if (access(path, R_OK) == 0) {
+			return path;
 		}
 	}
 
-	if ((basedir = getenv("XDG_DATA_DIRS"))) {
-		if (snprintf(icon_dir, 1024, "%s/icons/%s", basedir, theme) >= 1024) {
-			sway_log(L_ERROR, "Path too long to render");
-			// ditto
-			goto fail;
-		}
-
-		if (isdir(icon_dir)) {
-			return icon_dir;
-		}
-	}
-
-	// Spec says use "/usr/share/pixmaps/", but I see everything in
-	// "/usr/share/icons/" look it both, I suppose.
-	if (snprintf(icon_dir, 1024, "/usr/share/pixmaps/%s", theme) >= 1024) {
-		sway_log(L_ERROR, "Path too long to render");
-		goto fail;
-	}
-	if (isdir(icon_dir)) {
-		return icon_dir;
-	}
-
-	if (snprintf(icon_dir, 1024, "/usr/share/icons/%s", theme) >= 1024) {
-		sway_log(L_ERROR, "Path too long to render");
-		goto fail;
-	}
-	if (isdir(icon_dir)) {
-		return icon_dir;
-	}
-
-fail:
-	free(icon_dir);
-	sway_log(L_ERROR, "Could not find dir for theme: %s", theme);
+	free(path);
 	return NULL;
 }
 
-/**
- * Returns all theme dirs needed to be looked in for an icon.
- * Does not check for duplicates
- */
-static list_t *find_all_theme_dirs(const char *theme) {
-	list_t *dirs = create_list();
-	if (!dirs) {
-		return NULL;
-	}
-	char *dir = find_theme_dir(theme);
-	if (dir) {
-		list_add(dirs, dir);
-		list_t *inherits = find_inherits(dir);
-		list_cat(dirs, inherits);
-		list_free(inherits);
-	}
-	dir = find_theme_dir("hicolor");
-	if (dir) {
-		list_add(dirs, dir);
-	}
-
-	return dirs;
+static bool theme_exists_in_basedir(char *theme, char *basedir) {
+	size_t path_len = snprintf(NULL, 0, "%s/%s", basedir, theme) + 1;
+	char *path = malloc(path_len);
+	snprintf(path, path_len, "%s/%s", basedir, theme);
+	bool ret = dir_exists(path);
+	free(path);
+	return ret;
 }
 
-struct subdir {
-	int size;
-	char name[];
-};
-
-static int subdir_str_cmp(const void *_subdir, const void *_str) {
-	const struct subdir *subdir = _subdir;
-	const char *str = _str;
-	return strcmp(subdir->name, str);
-}
-/**
- * Helper to find_subdirs. Acts similar to `split_string(subdirs, ",")` but
- * generates a list of struct subdirs
- */
-static list_t *split_subdirs(char *subdir_str) {
-	list_t *subdir_list = create_list();
-	char *copy = strdup(subdir_str);
-	if (!subdir_list || !copy) {
-		list_free(subdir_list);
-		free(copy);
-		return NULL;
-	}
-
-	char *token;
-	token = strtok(copy, ",");
-	while(token) {
-		int len = strlen(token) + 1;
-		struct subdir *subdir =
-			malloc(sizeof(struct subdir) + sizeof(char [len]));
-		if (!subdir) {
-			// Return what we have
-			return subdir_list;
-		}
-		subdir->size = 0;
-		strcpy(subdir->name, token);
-
-		list_add(subdir_list, subdir);
-
-		token = strtok(NULL, ",");
-	}
-	free(copy);
-
-	return subdir_list;
-}
-/**
- * Returns a list of all subdirectories of a theme.
- * Take note: the subdir names are all relative to `theme_dir` and must be
- * combined with it to form a valid directory.
- *
- * Each member of the list is of type (struct subdir *) this struct contains
- * the name of the subdir, along with size information. These must be freed
- * bye the caller.
- *
- * This currently ignores min and max sizes of icons.
- */
-static list_t* find_theme_subdirs(const char *theme_dir) {
-	const char index_name[] = "/index.theme";
-	list_t *dirs = NULL;
-	char *path = malloc(strlen(theme_dir) + sizeof(index_name));
-	FILE *index = NULL;
-	if (!path) {
-		sway_log(L_ERROR, "Failed to allocate memory");
-		goto fail;
-	}
-
-	strcpy(path, theme_dir);
-	strcat(path, index_name);
-
-	index = fopen(path, "r");
-	if (!index) {
-		sway_log(L_ERROR, "Could not open file: %s", path);
-		goto fail;
-	}
-
-	char *buf = NULL;
-	size_t n = 0;
-	const char directories[] = "Directories";
-	while (!feof(index) && getline(&buf, &n, index) != -1) {
-		if (n <= sizeof(directories) + 1) {
-			continue;
-		}
-		if (strncmp(directories, buf, sizeof(directories) - 1) == 0) {
-			char *dirstr = buf + sizeof(directories);
-			dirs = split_subdirs(dirstr);
+static char *find_icon_with_theme(list_t *basedirs, list_t *themes, char *name,
+		int size, char *theme_name, int *min_size, int *max_size) {
+	struct icon_theme *theme = NULL;
+	for (int i = 0; i < themes->length; ++i) {
+		theme = themes->items[i];
+		if (strcmp(theme->name, theme_name) == 0) {
 			break;
 		}
+		theme = NULL;
 	}
-	// Now, find the size of each dir
-	struct subdir *current_subdir = NULL;
-	const char size[] = "Size";
-	while (!feof(index) && getline(&buf, &n, index) != -1) {
-		if (buf[0] == '[') {
-			int len = strlen(buf);
-			if (buf[len-1] == '\n') {
-				len--;
-			}
-			// replace ']'
-			buf[len-1] = '\0';
+	if (!theme) return NULL;
 
-			int index;
-			if ((index = list_seq_find(dirs, subdir_str_cmp, buf+1)) != -1) {
-				current_subdir = (dirs->items[index]);
-			}
-		}
-
-		if (strncmp(size, buf, sizeof(size) - 1) == 0) {
-			if (current_subdir) {
-				current_subdir->size = atoi(buf + sizeof(size));
-			}
-		}
-	}
-	free(buf);
-fail:
-	free(path);
-	if (index) {
-		fclose(index);
-	}
-	return dirs;
-}
-
-/* Returns the file of an icon given its name and size */
-static char *find_icon_file(const char *name, int size) {
-	int namelen = strlen(name);
-	list_t *dirs = find_all_theme_dirs(swaybar.config->icon_theme);
-	if (!dirs) {
-		return NULL;
-	}
-	int min_size_diff = INT_MAX;
-	char *current_file = NULL;
-
-	for (int i = 0; i < dirs->length; ++i) {
-		char *dir = dirs->items[i];
-		list_t *subdirs = find_theme_subdirs(dir);
-
-		if (!subdirs) {
+	char *icon = NULL;
+	for (int i = 0; i < basedirs->length; ++i) {
+		if (!theme_exists_in_basedir(theme->dir, basedirs->items[i])) {
 			continue;
 		}
-
-		for (int i = 0; i < subdirs->length; ++i) {
-			struct subdir *subdir = subdirs->items[i];
-
-			// Only use an unsized if we don't already have a
-			// canidate this should probably change to allow svgs
-			if (!subdir->size && current_file) {
-				continue;
-			}
-
-			int size_diff = abs(size - subdir->size);
-
-			if (size_diff >= min_size_diff) {
-				continue;
-			}
-
-			char *path = malloc(strlen(subdir->name) + strlen(dir) + 2);
-
-			strcpy(path, dir);
-			path[strlen(dir)] = '/';
-			strcpy(path + strlen(dir) + 1, subdir->name);
-
-			DIR *icons = opendir(path);
-			if (!icons) {
-				free(path);
-				continue;
-			}
-
-			struct dirent *direntry;
-			while ((direntry = readdir(icons)) != NULL) {
-				int len = strlen(direntry->d_name);
-				if (len <= namelen + 2) { //must have some ext
-					continue;
-				}
-				if (strncmp(direntry->d_name, name, namelen) == 0) {
-					char *ext = direntry->d_name + namelen + 1;
-#ifdef WITH_GDK_PIXBUF
-					if (strcmp(ext, "png") == 0 ||
-							strcmp(ext, "xpm") == 0 ||
-							strcmp(ext, "svg") == 0) {
-#else
-					if (strcmp(ext, "png") == 0) {
-#endif
-						free(current_file);
-						char *icon_path = malloc(strlen(path) + len + 2);
-
-						strcpy(icon_path, path);
-						icon_path[strlen(path)] = '/';
-						strcpy(icon_path + strlen(path) + 1, direntry->d_name);
-						current_file = icon_path;
-						min_size_diff = size_diff;
-					}
+		// search backwards to hopefully hit scalable/larger icons first
+		for (int j = theme->subdirs->length - 1; j >= 0; --j) {
+			struct icon_theme_subdir *subdir = theme->subdirs->items[j];
+			if (size >= subdir->min_size && size <= subdir->max_size) {
+				if ((icon = find_icon_in_subdir(name, basedirs->items[i],
+								theme->dir, subdir->name))) {
+					*min_size = subdir->min_size;
+					*max_size = subdir->max_size;
+					return icon;
 				}
 			}
-			free(path);
-			closedir(icons);
 		}
-		free_flat_list(subdirs);
 	}
-	free_flat_list(dirs);
 
-	return current_file;
+	// inexact match
+	unsigned smallest_error = -1; // UINT_MAX
+	for (int i = 0; i < basedirs->length; ++i) {
+		if (!theme_exists_in_basedir(theme->dir, basedirs->items[i])) {
+			continue;
+		}
+		for (int j = theme->subdirs->length - 1; j >= 0; --j) {
+			struct icon_theme_subdir *subdir = theme->subdirs->items[j];
+			unsigned error = (size > subdir->max_size ? size - subdir->max_size : 0)
+				+ (size < subdir->min_size ? subdir->min_size - size : 0);
+			if (error < smallest_error) {
+				char *test_icon = find_icon_in_subdir(name, basedirs->items[i],
+						theme->dir, subdir->name);
+				if (test_icon) {
+					icon = test_icon;
+					smallest_error = error;
+					*min_size = subdir->min_size;
+					*max_size = subdir->max_size;
+				}
+			}
+		}
+	}
+
+	if (!icon && theme->inherits) {
+		icon = find_icon_with_theme(basedirs, themes, name, size,
+				theme->inherits, min_size, max_size);
+	}
+
+	return icon;
 }
 
-cairo_surface_t *find_icon(const char *name, int size) {
-	char *image_path = find_icon_file(name, size);
-	if (image_path == NULL) {
-		return NULL;
+char *find_icon_in_dir(char *name, char *dir, int *min_size, int *max_size) {
+	char *icon = find_icon_in_subdir(name, dir, "", "");
+	if (icon) {
+		*min_size = 1;
+		*max_size = 512;
 	}
+	return icon;
 
-	cairo_surface_t *image = NULL;
-#ifdef WITH_GDK_PIXBUF
-	GError *err = NULL;
-	GdkPixbuf *pixbuf = gdk_pixbuf_new_from_file(image_path, &err);
-	if (!pixbuf) {
-		sway_log(L_ERROR, "Failed to load icon image: %s", err->message);
-	}
-	image = gdk_cairo_image_surface_create_from_pixbuf(pixbuf);
-	g_object_unref(pixbuf);
-#else
-	// TODO make svg work? cairo supports it. maybe remove gdk alltogether
-	image = cairo_image_surface_create_from_png(image_path);
-#endif //WITH_GDK_PIXBUF
-	if (!image) {
-		sway_log(L_ERROR, "Could not read icon image");
-		return NULL;
-	}
+}
 
-	free(image_path);
-	return image;
+static char *find_fallback_icon(list_t *basedirs, char *name, int *min_size,
+		int *max_size) {
+	for (int i = 0; i < basedirs->length; ++i) {
+		char *icon = find_icon_in_dir(name, basedirs->items[i], min_size, max_size);
+		if (icon) {
+			return icon;
+		}
+	}
+	return NULL;
+}
+
+char *find_icon(list_t *themes, list_t *basedirs, char *name, int size,
+		char *theme, int *min_size, int *max_size) {
+	// TODO https://specifications.freedesktop.org/icon-theme-spec/icon-theme-spec-latest.html#implementation_notes
+	char *icon = NULL;
+	if (theme) {
+		icon = find_icon_with_theme(basedirs, themes, name, size, theme,
+				min_size, max_size);
+	}
+	if (!icon) {
+		icon = find_icon_with_theme(basedirs, themes, name, size, "Hicolor",
+				min_size, max_size);
+	}
+	if (!icon) {
+		icon = find_fallback_icon(basedirs, name, min_size, max_size);
+	}
+	return icon;
 }

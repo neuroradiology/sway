@@ -1,50 +1,56 @@
 #ifndef _SWAYBAR_CONFIG_H
 #define _SWAYBAR_CONFIG_H
-
-#include <stdint.h>
 #include <stdbool.h>
-
+#include <stdint.h>
+#include <wayland-client.h>
+#include "../include/config.h"
 #include "list.h"
 #include "util.h"
 
-/**
- * Colors for a box with background, border and text colors.
- */
 struct box_colors {
 	uint32_t border;
 	uint32_t background;
 	uint32_t text;
 };
 
-/**
- * Swaybar config.
- */
-struct config {
+struct config_output {
+	struct wl_list link; // swaybar_config::outputs
+	char *name;
+	size_t index;
+};
+
+struct swaybar_binding {
+	uint32_t button;
+	char *command;
+	bool release;
+};
+
+struct swaybar_config {
 	char *status_command;
 	bool pango_markup;
-	uint32_t position;
+	uint32_t position; // zwlr_layer_surface_v1_anchor
 	char *font;
 	char *sep_symbol;
 	char *mode;
+	char *hidden_state;
+	char *modifier;
 	bool strip_workspace_numbers;
+	bool strip_workspace_name;
 	bool binding_mode_indicator;
 	bool wrap_scroll;
 	bool workspace_buttons;
+	list_t *bindings;
+	struct wl_list outputs; // config_output::link
 	bool all_outputs;
-	list_t *outputs;
-
-#ifdef ENABLE_TRAY
-	// Tray
-	char *tray_output;
-	char *icon_theme;
-
-	uint32_t tray_padding;
-	uint32_t activate_button;
-	uint32_t context_button;
-	uint32_t secondary_button;
-#endif
-
 	int height;
+	int status_padding;
+	int status_edge_padding;
+	struct {
+		int top;
+		int right;
+		int bottom;
+		int left;
+	} gaps;
 
 	struct {
 		uint32_t background;
@@ -61,26 +67,26 @@ struct config {
 		struct box_colors urgent_workspace;
 		struct box_colors binding_mode;
 	} colors;
+
+#if HAVE_TRAY
+	char *icon_theme;
+	struct wl_list tray_bindings; // struct tray_binding::link
+	bool tray_hidden;
+	list_t *tray_outputs; // char *
+	int tray_padding;
+#endif
 };
 
-/**
- * Parse position top|bottom|left|right.
- */
+#if HAVE_TRAY
+struct tray_binding {
+	uint32_t button;
+	char *command;
+	struct wl_list link; // struct tray_binding::link
+};
+#endif
+
+struct swaybar_config *init_config(void);
+void free_config(struct swaybar_config *config);
 uint32_t parse_position(const char *position);
 
-/**
- * Parse font.
- */
-char *parse_font(const char *font);
-
-/**
- * Initialize default sway config.
- */
-struct config *init_config();
-
-/**
- * Free config struct.
- */
-void free_config(struct config *config);
-
-#endif /* _SWAYBAR_CONFIG_H */
+#endif

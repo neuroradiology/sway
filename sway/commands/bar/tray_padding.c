@@ -1,34 +1,42 @@
 #include <stdlib.h>
 #include <strings.h>
+#include "config.h"
 #include "sway/commands.h"
+#include "sway/config.h"
 #include "log.h"
 
 struct cmd_results *bar_cmd_tray_padding(int argc, char **argv) {
-	const char *cmd_name = "tray_padding";
-#ifndef ENABLE_TRAY
-	return cmd_results_new(CMD_INVALID, cmd_name, "Invalid %s command"
-			"%s called, but sway was compiled without tray support",
-			cmd_name, cmd_name);
-#else
+#if HAVE_TRAY
 	struct cmd_results *error = NULL;
-	if ((error = checkarg(argc, cmd_name, EXPECTED_AT_LEAST, 1))) {
+	if ((error = checkarg(argc, "tray_padding", EXPECTED_AT_LEAST, 1))) {
+		return error;
+	}
+	if ((error = checkarg(argc, "tray_padding", EXPECTED_AT_MOST, 2))) {
 		return error;
 	}
 
 	if (!config->current_bar) {
-		return cmd_results_new(CMD_FAILURE, cmd_name, "No bar defined.");
+		return cmd_results_new(CMD_FAILURE, "No bar defined.");
+	}
+	struct bar_config *bar = config->current_bar;
+
+	char *end;
+	int padding = strtol(argv[0], &end, 10);
+	if (padding < 0 || (*end != '\0' && strcasecmp(end, "px") != 0)) {
+		return cmd_results_new(CMD_INVALID,
+				"[Bar %s] Invalid tray padding value: %s", bar->id, argv[0]);
 	}
 
-	if (argc == 1 || (argc == 2 && strcasecmp("px", argv[1]) == 0)) {
-		char *inv;
-		uint32_t padding = strtoul(argv[0], &inv, 10);
-		if (*inv == '\0' || strcasecmp(inv, "px") == 0) {
-			config->current_bar->tray_padding = padding;
-			sway_log(L_DEBUG, "Enabling tray padding of %d px on bar: %s", padding, config->current_bar->id);
-			return cmd_results_new(CMD_SUCCESS, NULL, NULL);
-		}
+	if (argc == 2 && strcasecmp(argv[1], "px") != 0) {
+		return cmd_results_new(CMD_INVALID,
+				"Expected 'tray_padding <px> [px]'");
 	}
-	return cmd_results_new(CMD_FAILURE, cmd_name,
-		"Expected 'tray_padding <padding>[px]'");
+
+	sway_log(SWAY_DEBUG, "[Bar %s] Setting tray padding to %d", bar->id, padding);
+	config->current_bar->tray_padding = padding;
+	return cmd_results_new(CMD_SUCCESS, NULL);
+#else
+	return cmd_results_new(CMD_INVALID,
+			"Sway has been compiled without tray support");
 #endif
 }

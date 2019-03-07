@@ -1,87 +1,68 @@
+#define _POSIX_C_SOURCE 200809L
 #include <string.h>
-#include <strings.h>
-#include <stdbool.h>
 #include "sway/commands.h"
+#include "sway/config.h"
+#include "sway/tree/view.h"
 #include "list.h"
+#include "log.h"
 #include "stringop.h"
 
-static void find_marks_callback(swayc_t *container, void *_mark) {
-	char *mark = (char *)_mark;
-
-	int index;
-	if (container->marks && ((index = list_seq_find(container->marks, (int (*)(const void *, const void *))strcmp, mark)) != -1)) {
-		list_del(container->marks, index);
-	}
-}
+// mark foo                      Same as mark --replace foo
+// mark --add foo                Add this mark to view's list
+// mark --replace foo            Replace view's marks with this single one
+// mark --add --toggle foo       Toggle current mark and persist other marks
+// mark --replace --toggle foo   Toggle current mark and remove other marks
 
 struct cmd_results *cmd_mark(int argc, char **argv) {
 	struct cmd_results *error = NULL;
-	if (config->reading) return cmd_results_new(CMD_FAILURE, "mark", "Can't be used in config file.");
 	if ((error = checkarg(argc, "mark", EXPECTED_AT_LEAST, 1))) {
 		return error;
 	}
-
-	swayc_t *view = current_container;
-	bool add = false;
-	bool toggle = false;
-
-	if (strcmp(argv[0], "--add") == 0) {
-		--argc; ++argv;
-		add = true;
-	} else if (strcmp(argv[0], "--replace") == 0) {
-		--argc; ++argv;
+	struct sway_container *container = config->handler_context.container;
+	if (!container) {
+		return cmd_results_new(CMD_INVALID, "Only containers can have marks");
 	}
 
-	if (argc && strcmp(argv[0], "--toggle") == 0) {
-		--argc; ++argv;
-		toggle = true;
-	}
-
-	if (argc) {
-		char *mark = join_args(argv, argc);
-
-		// Remove all existing marks of this type
-		container_map(&root_container, find_marks_callback, mark);
-
-		if (view->marks) {
-			if (add) {
-				int index;
-				if ((index = list_seq_find(view->marks, (int (*)(const void *, const void *))strcmp, mark)) != -1) {
-					if (toggle) {
-						free(view->marks->items[index]);
-						list_del(view->marks, index);
-
-						if (0 == view->marks->length) {
-							list_free(view->marks);
-							view->marks = NULL;
-						}
-					}
-					free(mark);
-				} else {
-					list_add(view->marks, mark);
-				}
-			} else {
-				if (toggle && list_seq_find(view->marks, (int (*)(const void *, const void *))strcmp, mark) != -1) {
-					// Delete the list
-					list_foreach(view->marks, free);
-					list_free(view->marks);
-					view->marks = NULL;
-				} else {
-					// Delete and replace with a new list
-					list_foreach(view->marks, free);
-					list_free(view->marks);
-
-					view->marks = create_list();
-					list_add(view->marks, mark);
-				}
-			}
+	bool add = false, toggle = false;
+	while (argc > 0 && strncmp(*argv, "--", 2) == 0) {
+		if (strcmp(*argv, "--add") == 0) {
+			add = true;
+		} else if (strcmp(*argv, "--replace") == 0) {
+			add = false;
+		} else if (strcmp(*argv, "--toggle") == 0) {
+			toggle = true;
 		} else {
-			view->marks = create_list();
-			list_add(view->marks, mark);
+			return cmd_results_new(CMD_INVALID,
+					"Unrecognized argument '%s'", *argv);
 		}
-	} else {
-		return cmd_results_new(CMD_FAILURE, "mark",
-			"Expected 'mark [--add|--replace] [--toggle] <mark>'");
+		++argv;
+		--argc;
 	}
-	return cmd_results_new(CMD_SUCCESS, NULL, NULL);
+
+	if (!argc) {
+		return cmd_results_new(CMD_INVALID,
+				"Expected '[--add|--replace] [--toggle] <identifier>'");
+	}
+
+	char *mark = join_args(argv, argc);
+	bool had_mark = container_has_mark(container, mark);
+
+	if (!add) {
+		// Replacing
+		container_clear_marks(container);
+	}
+
+	container_find_and_unmark(mark);
+
+	if (!toggle || !had_mark) {
+		container_add_mark(container, mark);
+	}
+
+	free(mark);
+	container_update_marks_textures(container);
+	if (container->view) {
+		view_execute_criteria(container->view);
+	}
+
+	return cmd_results_new(CMD_SUCCESS, NULL);
 }

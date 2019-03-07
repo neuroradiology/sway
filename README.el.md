@@ -1,6 +1,6 @@
-# sway [![](https://api.travis-ci.org/swaywm/sway.svg)](https://travis-ci.org/swaywm/sway) [![Donate with fosspay](https://drewdevault.com/donate/static/donate-with-fosspay.png)](https://drewdevault.com/donate?project=4)
+# sway
 
-"Ο Sway (**S**irCmpwn's **Way**land) είναι ένας **υπό ανάπτυξη** [Wayland](http://wayland.freedesktop.org/) διαχειριστής παραθύρων συμβατός με τον αντίστοιχο διαχειριστή παραθύρων i3 για τον X11.
+Sway είναι ένας **υπό ανάπτυξη** [Wayland](http://wayland.freedesktop.org/) διαχειριστής παραθύρων συμβατός με τον αντίστοιχο διαχειριστή παραθύρων i3 για τον X11.
 Διαβάστε τις [Συνήθεις Ερωτήσεις](https://github.com/swaywm/sway/wiki). Συνδεθείτε στο [κανάλι μας στο IRC](http://webchat.freenode.net/?channels=sway&uio=d4) (#sway στο
 irc.freenode.net).
 
@@ -23,14 +23,6 @@ To username μου στο Freenode είναι kon14 και θα με βρείτ�
 
 Οι εκδόσεις υπογράφονται ως [B22DA89A](http://pgp.mit.edu/pks/lookup?op=vindex&search=0x52CB6609B22DA89A) και δημοσιεύονται στο [GitHub](https://github.com/swaywm/sway/releases).
 
-## Κατάσταση
-
-- [Υποστήριξη δυνατοτήτων του i3](https://github.com/swaywm/sway/issues/2)
-- [Υποστήριξη δυνατοτήτων IPC](https://github.com/swaywm/sway/issues/98)
-- [Υποστήριξη δυνατοτήτων i3bar](https://github.com/swaywm/sway/issues/343)
-- [Υποστήριξη δυνατοτήτων i3-gaps](https://github.com/swaywm/sway/issues/307)
-- [Δυνατότητες Ασφαλείας](https://github.com/swaywm/sway/issues/984)
-
 ## Εγκατάσταση
 
 ### Από Πακέτα
@@ -45,37 +37,27 @@ To username μου στο Freenode είναι kon14 και θα με βρείτ�
 
 Εγκατάσταση εξαρτήσεων:
 
-* cmake
+* meson
 * [wlc](https://github.com/Cloudef/wlc)
 * wayland
 * xwayland
 * libinput >= 1.6.0
 * libcap
-* asciidoc
 * pcre
-* json-c <= 0.12.1
+* json-c >= 0.13
 * pango
 * cairo
 * gdk-pixbuf2 *
-* pam **
-* imagemagick (αναγκαίο για καταγραφή εικόνας μέσω του swaygrab)
-* ffmpeg (αναγκαίο για καταγραφή video μέσω του swaygrab)
+* [scdoc](https://git.sr.ht/~sircmpwn/scdoc) (required for man pages)
+* git
 
-_\*Απαιτείται μόνο για swaybar, swaybg, and swaylock_
-
-_\*\*Απαιτείται μόνο για swaylock_
+_\*Απαιτείται μόνο για swaybar, swaybg_
 
 Εκτελέστε αυτές τις εντολές:
 
-    mkdir build
-    cd build
-    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_SYSCONFDIR=/etc ..
-    make
-    sudo make install
-
-Σε συστήματα με logind, χρειάζεται να ορίσετε μερικά δικαιώματα caps στο εκτελέσιμο αρχείο:
-
-    sudo setcap "cap_sys_ptrace,cap_sys_tty_config=eip" /usr/local/bin/sway
+    meson build
+    ninja -C build
+    sudo ninja -C build install
 
 Σε συστήματα χωρίς logind, χρειάζεται να θέσετε το suid bit στο εκτελέσιμο αρχείο:
 

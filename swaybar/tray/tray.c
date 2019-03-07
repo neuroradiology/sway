@@ -1,398 +1,131 @@
-#define _XOPEN_SOURCE 700
-#include <unistd.h>
+#include <cairo.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
-#include <dbus/dbus.h>
-#include "swaybar/bar.h"
-#include "swaybar/tray/tray.h"
-#include "swaybar/tray/dbus.h"
-#include "swaybar/tray/sni.h"
-#include "swaybar/tray/sni_watcher.h"
-#include "swaybar/bar.h"
 #include "swaybar/config.h"
+#include "swaybar/bar.h"
+#include "swaybar/tray/icon.h"
+#include "swaybar/tray/host.h"
+#include "swaybar/tray/item.h"
+#include "swaybar/tray/tray.h"
+#include "swaybar/tray/watcher.h"
 #include "list.h"
 #include "log.h"
 
-struct tray *tray;
-
-static void register_host(char *name) {
-	DBusMessage *message;
-
-	message = dbus_message_new_method_call(
-			"org.freedesktop.StatusNotifierWatcher",
-			"/StatusNotifierWatcher",
-			"org.freedesktop.StatusNotifierWatcher",
-			"RegisterStatusNotifierHost");
-	if (!message) {
-		sway_log(L_ERROR, "Cannot allocate dbus method call");
-		return;
+static int handle_lost_watcher(sd_bus_message *msg,
+		void *data, sd_bus_error *error) {
+	char *service, *old_owner, *new_owner;
+	int ret = sd_bus_message_read(msg, "sss", &service, &old_owner, &new_owner);
+	if (ret < 0) {
+		sway_log(SWAY_ERROR, "Failed to parse owner change message: %s", strerror(-ret));
+		return ret;
 	}
 
-	dbus_message_append_args(message,
-			DBUS_TYPE_STRING, &name,
-			DBUS_TYPE_INVALID);
-
-	dbus_connection_send(conn, message, NULL);
-
-	dbus_message_unref(message);
-}
-
-static void get_items_reply(DBusPendingCall *pending, void *_data) {
-	DBusMessage *reply = dbus_pending_call_steal_reply(pending);
-
-	if (!reply) {
-		sway_log(L_ERROR, "Got no items reply from sni watcher");
-		goto bail;
-	}
-
-	int message_type = dbus_message_get_type(reply);
-
-	if (message_type == DBUS_MESSAGE_TYPE_ERROR) {
-		char *msg;
-
-		dbus_message_get_args(reply, NULL,
-				DBUS_TYPE_STRING, &msg,
-				DBUS_TYPE_INVALID);
-
-		sway_log(L_ERROR, "Message is error: %s", msg);
-		goto bail;
-	}
-
-	DBusMessageIter iter;
-	DBusMessageIter variant;
-	DBusMessageIter array;
-
-	dbus_message_iter_init(reply, &iter);
-	if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_VARIANT) {
-		sway_log(L_ERROR, "Replyed with wrong type, not v(as)");
-		goto bail;
-	}
-	dbus_message_iter_recurse(&iter, &variant);
-	if (dbus_message_iter_get_arg_type(&variant) != DBUS_TYPE_ARRAY ||
-			dbus_message_iter_get_element_type(&variant) != DBUS_TYPE_STRING) {
-		sway_log(L_ERROR, "Replyed with wrong type, not v(as)");
-		goto bail;
-	}
-
-	// Clear list
-	list_foreach(tray->items, (void (*)(void *))sni_free);
-	list_free(tray->items);
-	tray->items = create_list();
-
-	// O(n) function, could be faster dynamically reading values
-	int len = dbus_message_iter_get_element_count(&variant);
-
-	dbus_message_iter_recurse(&variant, &array);
-	for (int i = 0; i < len; i++) {
-		const char *name;
-		dbus_message_iter_get_basic(&array, &name);
-
-		struct StatusNotifierItem *item = sni_create(name);
-
-		if (item) {
-			sway_log(L_DEBUG, "Item registered with host: %s", name);
-			list_add(tray->items, item);
-			dirty = true;
+	if (!*new_owner) {
+		struct swaybar_tray *tray = data;
+		if (strcmp(service, "org.freedesktop.StatusNotifierWatcher") == 0) {
+			tray->watcher_xdg = create_watcher("freedesktop", tray->bus);
+		} else if (strcmp(service, "org.kde.StatusNotifierWatcher") == 0) {
+			tray->watcher_kde = create_watcher("kde", tray->bus);
 		}
 	}
 
-bail:
-	dbus_message_unref(reply);
-	dbus_pending_call_unref(pending);
-	return;
-}
-static void get_items() {
-	DBusPendingCall *pending;
-	DBusMessage *message = dbus_message_new_method_call(
-			"org.freedesktop.StatusNotifierWatcher",
-			"/StatusNotifierWatcher",
-			"org.freedesktop.DBus.Properties",
-			"Get");
-
-	const char *iface = "org.freedesktop.StatusNotifierWatcher";
-	const char *prop = "RegisteredStatusNotifierItems";
-	dbus_message_append_args(message,
-			DBUS_TYPE_STRING, &iface,
-			DBUS_TYPE_STRING, &prop,
-			DBUS_TYPE_INVALID);
-
-	bool status =
-		dbus_connection_send_with_reply(conn, message, &pending, -1);
-	dbus_message_unref(message);
-
-	if (!(pending || status)) {
-		sway_log(L_ERROR, "Could not get items");
-		return;
-	}
-
-	dbus_pending_call_set_notify(pending, get_items_reply, NULL, NULL);
-}
-
-static DBusHandlerResult signal_handler(DBusConnection *connection,
-		DBusMessage *message, void *_data) {
-	if (dbus_message_is_signal(message, "org.freedesktop.StatusNotifierWatcher",
-				"StatusNotifierItemRegistered")) {
-		const char *name;
-		if (!dbus_message_get_args(message, NULL,
-				DBUS_TYPE_STRING, &name,
-				DBUS_TYPE_INVALID)) {
-			sway_log(L_ERROR, "Error getting StatusNotifierItemRegistered args");
-			return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
-		}
-
-		if (list_seq_find(tray->items, sni_str_cmp, name) == -1) {
-			struct StatusNotifierItem *item = sni_create(name);
-
-			if (item) {
-				list_add(tray->items, item);
-				dirty = true;
-			}
-		}
-
-		return DBUS_HANDLER_RESULT_HANDLED;
-	} else if (dbus_message_is_signal(message, "org.freedesktop.StatusNotifierWatcher",
-				"StatusNotifierItemUnregistered")) {
-		const char *name;
-		if (!dbus_message_get_args(message, NULL,
-				DBUS_TYPE_STRING, &name,
-				DBUS_TYPE_INVALID)) {
-			sway_log(L_ERROR, "Error getting StatusNotifierItemUnregistered args");
-			return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
-		}
-
-		int index;
-		if ((index = list_seq_find(tray->items, sni_str_cmp, name)) != -1) {
-			sni_free(tray->items->items[index]);
-			list_del(tray->items, index);
-			dirty = true;
-		} else {
-			// If it's not in our list, then our list is incorrect.
-			// Fetch all items again
-			sway_log(L_INFO, "Host item list incorrect, refreshing");
-			get_items();
-		}
-
-		return DBUS_HANDLER_RESULT_HANDLED;
-	} else if (dbus_message_is_signal(message, "org.freedesktop.StatusNotifierItem",
-				"NewIcon") || dbus_message_is_signal(message,
-				"org.kde.StatusNotifierItem", "NewIcon")) {
-		const char *name;
-		int index;
-		struct StatusNotifierItem *item;
-
-		name = dbus_message_get_sender(message);
-		if ((index = list_seq_find(tray->items, sni_uniq_cmp, name)) != -1) {
-			item = tray->items->items[index];
-			sway_log(L_INFO, "NewIcon signal from item %s", item->name);
-			get_icon(item);
-		}
-
-		return DBUS_HANDLER_RESULT_HANDLED;
-	}
-	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
-}
-
-static int init_host() {
-	tray = (struct tray *)malloc(sizeof(tray));
-
-	tray->items = create_list();
-
-	DBusError error;
-	dbus_error_init(&error);
-	char *name = NULL;
-	if (!conn) {
-		sway_log(L_ERROR, "Connection is null, cannot init SNI host");
-		goto err;
-	}
-	name = calloc(sizeof(char), 256);
-
-	if (!name) {
-		sway_log(L_ERROR, "Cannot allocate name");
-		goto err;
-	}
-
-	pid_t pid = getpid();
-	if (snprintf(name, 256, "org.freedesktop.StatusNotifierHost-%d", pid)
-			>= 256) {
-		sway_log(L_ERROR, "Cannot get host name because string is too short."
-				"This should not happen");
-		goto err;
-	}
-
-	// We want to be the sole owner of this name
-	if (dbus_bus_request_name(conn, name, DBUS_NAME_FLAG_DO_NOT_QUEUE,
-			&error) != DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER) {
-		sway_log(L_ERROR, "Cannot get host name and start the tray");
-		goto err;
-	}
-	if (dbus_error_is_set(&error)) {
-		sway_log(L_ERROR, "Dbus err getting host name: %s\n", error.message);
-		goto err;
-	}
-	sway_log(L_DEBUG, "Got host name");
-
-	register_host(name);
-
-	get_items();
-
-	// Perhaps use addmatch helper functions like wlc does?
-	dbus_bus_add_match(conn,
-			"type='signal',\
-			sender='org.freedesktop.StatusNotifierWatcher',\
-			member='StatusNotifierItemRegistered'",
-			&error);
-	if (dbus_error_is_set(&error)) {
-		sway_log(L_ERROR, "dbus_err: %s", error.message);
-		goto err;
-	}
-	dbus_bus_add_match(conn,
-			"type='signal',\
-			sender='org.freedesktop.StatusNotifierWatcher',\
-			member='StatusNotifierItemUnregistered'",
-			&error);
-	if (dbus_error_is_set(&error)) {
-		sway_log(L_ERROR, "dbus_err: %s", error.message);
-		return -1;
-	}
-
-	// SNI matches
-	dbus_bus_add_match(conn,
-			"type='signal',\
-			interface='org.freedesktop.StatusNotifierItem',\
-			member='NewIcon'",
-			&error);
-	if (dbus_error_is_set(&error)) {
-		sway_log(L_ERROR, "dbus_err %s", error.message);
-		goto err;
-	}
-	dbus_bus_add_match(conn,
-			"type='signal',\
-			interface='org.kde.StatusNotifierItem',\
-			member='NewIcon'",
-			&error);
-	if (dbus_error_is_set(&error)) {
-		sway_log(L_ERROR, "dbus_err %s", error.message);
-		goto err;
-	}
-
-	dbus_connection_add_filter(conn, signal_handler, NULL, NULL);
-
-	free(name);
 	return 0;
-
-err:
-	// TODO better handle errors
-	free(name);
-	return -1;
 }
 
-void tray_mouse_event(struct output *output, int x, int y,
-		uint32_t button, uint32_t state) {
+struct swaybar_tray *create_tray(struct swaybar *bar) {
+	sway_log(SWAY_DEBUG, "Initializing tray");
 
-	struct window *window = output->window;
-	uint32_t tray_padding = swaybar.config->tray_padding;
-	int tray_width = window->width * window->scale;
-
-	for (int i = 0; i < output->items->length; ++i) {
-		struct sni_icon_ref *item =
-			 output->items->items[i];
-		int icon_width = cairo_image_surface_get_width(item->icon);
-
-		tray_width -= tray_padding;
-		if (x <= tray_width && x >= tray_width - icon_width) {
-			if (button == swaybar.config->activate_button) {
-				sni_activate(item->ref, x, y);
-			} else if (button == swaybar.config->context_button) {
-				sni_context_menu(item->ref, x, y);
-			} else if (button == swaybar.config->secondary_button) {
-				sni_secondary(item->ref, x, y);
-			}
-			break;
-		}
-		tray_width -= icon_width;
+	sd_bus *bus;
+	int ret = sd_bus_open_user(&bus);
+	if (ret < 0) {
+		sway_log(SWAY_ERROR, "Failed to connect to user bus: %s", strerror(-ret));
+		return NULL;
 	}
+
+	struct swaybar_tray *tray = calloc(1, sizeof(struct swaybar_tray));
+	if (!tray) {
+		return NULL;
+	}
+	tray->bar = bar;
+	tray->bus = bus;
+	tray->fd = sd_bus_get_fd(tray->bus);
+
+	tray->watcher_xdg = create_watcher("freedesktop", tray->bus);
+	tray->watcher_kde = create_watcher("kde", tray->bus);
+
+	ret = sd_bus_match_signal(bus, NULL, "org.freedesktop.DBus",
+			"/org/freedesktop/DBus", "org.freedesktop.DBus",
+			"NameOwnerChanged", handle_lost_watcher, tray);
+	if (ret < 0) {
+		sway_log(SWAY_ERROR, "Failed to subscribe to unregistering events: %s",
+				strerror(-ret));
+	}
+
+	tray->items = create_list();
+
+	init_host(&tray->host_xdg, "freedesktop", tray);
+	init_host(&tray->host_kde, "kde", tray);
+
+	init_themes(&tray->themes, &tray->basedirs);
+
+	return tray;
 }
 
-uint32_t tray_render(struct output *output, struct config *config) {
-	struct window *window = output->window;
-	cairo_t *cairo = window->cairo;
-
-	// Tray icons
-	uint32_t tray_padding = config->tray_padding;
-	uint32_t tray_width = window->width * window->scale;
-	const int item_size = (window->height * window->scale) - (2 * tray_padding);
-
-	if (item_size < 0) {
-		// Can't render items if the padding is too large
-		return tray_width;
+void destroy_tray(struct swaybar_tray *tray) {
+	if (!tray) {
+		return;
 	}
-
-	if (config->tray_output && strcmp(config->tray_output, output->name) != 0) {
-		return tray_width;
-	}
-
+	finish_host(&tray->host_xdg);
+	finish_host(&tray->host_kde);
 	for (int i = 0; i < tray->items->length; ++i) {
-		struct StatusNotifierItem *item =
-			tray->items->items[i];
-		if (!item->image) {
-			continue;
-		}
-
-		struct sni_icon_ref *render_item = NULL;
-		int j;
-		for (j = i; j < output->items->length; ++j) {
-			struct sni_icon_ref *ref =
-				output->items->items[j];
-			if (ref->ref == item) {
-				render_item = ref;
-				break;
-			} else {
-				sni_icon_ref_free(ref);
-				list_del(output->items, j);
-			}
-		}
-
-		if (!render_item) {
-			render_item = sni_icon_ref_create(item, item_size);
-			list_add(output->items, render_item);
-		} else if (item->dirty) {
-			// item needs re-render
-			sni_icon_ref_free(render_item);
-			output->items->items[j] = render_item =
-				sni_icon_ref_create(item, item_size);
-		}
-
-		tray_width -= tray_padding;
-		tray_width -= item_size;
-
-		cairo_operator_t op = cairo_get_operator(cairo);
-		cairo_set_operator(cairo, CAIRO_OPERATOR_OVER);
-		cairo_set_source_surface(cairo, render_item->icon, tray_width, tray_padding);
-		cairo_rectangle(cairo, tray_width, tray_padding, item_size, item_size);
-		cairo_fill(cairo);
-		cairo_set_operator(cairo, op);
-
-		item->dirty = false;
+		destroy_sni(tray->items->items[i]);
 	}
-
-
-	if (tray_width != window->width * window->scale) {
-		tray_width -= tray_padding;
-	}
-
-	return tray_width;
+	list_free(tray->items);
+	destroy_watcher(tray->watcher_xdg);
+	destroy_watcher(tray->watcher_kde);
+	sd_bus_flush_close_unref(tray->bus);
+	finish_themes(tray->themes, tray->basedirs);
+	free(tray);
 }
 
-void init_tray(struct bar *bar) {
-	if (!bar->config->tray_output || strcmp(bar->config->tray_output, "none") != 0) {
-		/* Connect to the D-Bus */
-		dbus_init();
-
-		/* Start the SNI watcher */
-		init_sni_watcher();
-
-		/* Start the SNI host */
-		init_host();
+void tray_in(int fd, short mask, void *data) {
+	sd_bus *bus = data;
+	int ret;
+	while ((ret = sd_bus_process(bus, NULL)) > 0) {
+		// This space intentionally left blank
 	}
+	if (ret < 0) {
+		sway_log(SWAY_ERROR, "Failed to process bus: %s", strerror(-ret));
+	}
+}
+
+static int cmp_output(const void *item, const void *cmp_to) {
+	const struct swaybar_output *output = cmp_to;
+	if (output->identifier && strcmp(item, output->identifier) == 0) {
+		return 0;
+	}
+	return strcmp(item, output->name);
+}
+
+uint32_t render_tray(cairo_t *cairo, struct swaybar_output *output, double *x) {
+	struct swaybar_config *config = output->bar->config;
+	if (config->tray_outputs) {
+		if (list_seq_find(config->tray_outputs, cmp_output, output) == -1) {
+			return 0;
+		}
+	} // else display on all
+
+	if ((int) output->height*output->scale <= 2*config->tray_padding) {
+		return 2*config->tray_padding + 1;
+	}
+
+	uint32_t max_height = 0;
+	struct swaybar_tray *tray = output->bar->tray;
+	for (int i = 0; i < tray->items->length; ++i) {
+		uint32_t h = render_sni(cairo, output, x, tray->items->items[i]);
+		max_height = h > max_height ? h : max_height;
+	}
+
+	return max_height;
 }

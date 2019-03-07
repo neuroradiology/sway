@@ -1,10 +1,10 @@
-# sway [![](https://api.travis-ci.org/swaywm/sway.svg)](https://travis-ci.org/swaywm/sway) [![Donate with fosspay](https://drewdevault.com/donate/static/donate-with-fosspay.png)](https://drewdevault.com/donate?project=4)
+# sway
 
-**Sway** ("**S**irCmpwn's **Way**land compositor") це сумісний з i3 композитор
-[Wayland](http://wayland.freedesktop.org/) (**у стані розробки**).
-Ознайомтесь з [ЧаПами](https://github.com/swaywm/sway/wiki).
-Приєднуйтесь до [спільноти в IRC](http://webchat.freenode.net/?channels=sway&uio=d4)
-(#sway на irc.freenode.net).
+**Sway** це сумісний з i3 композитор [Wayland](http://wayland.freedesktop.org/)
+(**у стані розробки**).  Ознайомтесь з
+[ЧаПами](https://github.com/swaywm/sway/wiki).  Приєднуйтесь до [спільноти в
+IRC](http://webchat.freenode.net/?channels=sway&uio=d4) (#sway на
+irc.freenode.net).
 
 [![](https://sr.ht/ICd5.png)](https://sr.ht/ICd5.png)
 
@@ -29,14 +29,6 @@ Hummer12007 у IRC-спільноті. Будьте терплячі, вам о�
 Випуски підписані ключем [B22DA89A](http://pgp.mit.edu/pks/lookup?op=vindex&search=0x52CB6609B22DA89A)
 та публікуються на сторінці [GitHub](https://github.com/swaywm/sway/releases).
 
-## Стан розробки
-
-- [Підтримка функцій i3](https://github.com/swaywm/sway/issues/2)
-- [Реалізація IPC-протоколу i3](https://github.com/swaywm/sway/issues/98)
-- [Підтримка функцій i3bar](https://github.com/swaywm/sway/issues/343)
-- [Підтримка функцій i3-gaps](https://github.com/swaywm/sway/issues/307)
-- [Функції безпеки](https://github.com/swaywm/sway/issues/984)
-
 ## Встановлення
 
 ### З пакунків
@@ -54,33 +46,27 @@ Sway доступний у багатьох дистрибутивах Linux (а
 
 Встановіть залежності:
 
-* cmake
+* meson
 * [wlc](https://github.com/Cloudef/wlc)
 * wayland
 * xwayland
 * libinput >= 1.6.0
 * libcap
-* asciidoc
 * pcre
-* json-c <= 0.12.1
+* json-c >= 0.13
 * pango
 * cairo
 * gdk-pixbuf2 *
-* pam **
-* imagemagick (для захоплення зображень за допомогою swaygrab)
-* ffmpeg (для захоплення відео за допомогою swaygrab)
+* [scdoc](https://git.sr.ht/~sircmpwn/scdoc) (required for man pages)
+* git
 
-_\*Лише для swaybar, swaybg та swaylock_
-
-_\*\*Лише для swaylock_
+_\*Лише для swaybar, swaybg_
 
 Виконайте ці команди:
 
-    mkdir build
-    cd build
-    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_SYSCONFDIR=/etc ..
-    make
-    sudo make install
+    meson build
+    ninja -C build
+    sudo ninja -C build install
 
 На системах **з** logind, варто встановити декілька можливостей (caps)
 на виконуваний файл sway:

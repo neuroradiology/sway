@@ -1,390 +1,485 @@
-#define _XOPEN_SOURCE 500
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-#include <fcntl.h>
+#define _POSIX_C_SOURCE 200809L
+#include <assert.h>
 #include <errno.h>
-#include <sys/wait.h>
-#include <signal.h>
+#include <fcntl.h>
 #include <poll.h>
-#ifdef __FreeBSD__
-#include <dev/evdev/input-event-codes.h>
-#else
-#include <linux/input-event-codes.h>
-#endif
-#ifdef ENABLE_TRAY
-#include <dbus/dbus.h>
-#include "swaybar/tray/sni_watcher.h"
-#include "swaybar/tray/tray.h"
-#include "swaybar/tray/sni.h"
-#endif
-#include "swaybar/ipc.h"
-#include "swaybar/render.h"
-#include "swaybar/config.h"
-#include "swaybar/status_line.h"
-#include "swaybar/event_loop.h"
+#include <signal.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <wayland-client.h>
+#include <wayland-cursor.h>
+#include "config.h"
 #include "swaybar/bar.h"
+#include "swaybar/config.h"
+#include "swaybar/i3bar.h"
+#include "swaybar/input.h"
+#include "swaybar/ipc.h"
+#include "swaybar/status_line.h"
+#include "swaybar/render.h"
+#if HAVE_TRAY
+#include "swaybar/tray/tray.h"
+#endif
 #include "ipc-client.h"
 #include "list.h"
 #include "log.h"
+#include "loop.h"
+#include "pool-buffer.h"
+#include "wlr-layer-shell-unstable-v1-client-protocol.h"
+#include "xdg-output-unstable-v1-client-protocol.h"
 
-static void bar_init(struct bar *bar) {
-	bar->config = init_config();
-	bar->status = init_status_line();
-	bar->outputs = create_list();
-}
-
-static void spawn_status_cmd_proc(struct bar *bar) {
-	if (bar->config->status_command) {
-		int pipe_read_fd[2];
-		int pipe_write_fd[2];
-
-		if (pipe(pipe_read_fd) != 0) {
-			sway_log(L_ERROR, "Unable to create pipes for status_command fork");
-			return;
-		}
-		if (pipe(pipe_write_fd) != 0) {
-			sway_log(L_ERROR, "Unable to create pipe for status_command fork (write)");
-			close(pipe_read_fd[0]);
-			close(pipe_read_fd[1]);
-			return;
-		}
-
-		bar->status_command_pid = fork();
-		if (bar->status_command_pid == 0) {
-			close(pipe_read_fd[0]);
-			dup2(pipe_read_fd[1], STDOUT_FILENO);
-			close(pipe_read_fd[1]);
-			
-			dup2(pipe_write_fd[0], STDIN_FILENO);
-			close(pipe_write_fd[0]);
-			close(pipe_write_fd[1]);
-			
-			char *const cmd[] = {
-				"sh",
-				"-c",
-				bar->config->status_command,
-				NULL,
-			};
-			execvp(cmd[0], cmd);
-			return;
-		}
-
-		close(pipe_read_fd[1]);
-		bar->status_read_fd = pipe_read_fd[0];
-		fcntl(bar->status_read_fd, F_SETFL, O_NONBLOCK);
-		
-		close(pipe_write_fd[0]);
-		bar->status_write_fd = pipe_write_fd[1];
-		fcntl(bar->status_write_fd, F_SETFL, O_NONBLOCK);
-	}
-}
-
-struct output *new_output(const char *name) {
-	struct output *output = malloc(sizeof(struct output));
-	output->name = strdup(name);
-	output->window = NULL;
-	output->registry = NULL;
-	output->workspaces = create_list();
-#ifdef ENABLE_TRAY
-	output->items = create_list();
-#endif
-	return output;
-}
-
-static void mouse_button_notify(struct window *window, int x, int y,
-		uint32_t button, uint32_t state_w) {
-	sway_log(L_DEBUG, "Mouse button %d clicked at %d %d %d", button, x, y, state_w);
-	if (!state_w) {
-		return;
-	}
-
-	struct output *clicked_output = NULL;
-	for (int i = 0; i < swaybar.outputs->length; i++) {
-		struct output *output = swaybar.outputs->items[i];
-		if (window == output->window) {
-			clicked_output = output;
-			break;
-		}
-	}
-
-	if (!sway_assert(clicked_output != NULL, "Got pointer event for non-existing output")) {
-		return;
-	}
-
-	double button_x = 0.5;
-	for (int i = 0; i < clicked_output->workspaces->length; i++) {
-		struct workspace *workspace = clicked_output->workspaces->items[i];
-		int button_width, button_height;
-
-		workspace_button_size(window, workspace->name, &button_width, &button_height);
-
-		button_x += button_width;
-		if (x <= button_x) {
-			ipc_send_workspace_command(workspace->name);
-			break;
-		}
-	}
-
-	switch (button) {
-	case BTN_LEFT:
-		status_line_mouse_event(&swaybar, x, y, 1);
-		break;
-	case BTN_MIDDLE:
-		status_line_mouse_event(&swaybar, x, y, 2);
-		break;
-	case BTN_RIGHT:
-		status_line_mouse_event(&swaybar, x, y, 3);
-		break;
-	}
-
-#ifdef ENABLE_TRAY
-	tray_mouse_event(clicked_output, x, y, button, state_w);
-#endif
-
-}
-
-static void mouse_scroll_notify(struct window *window, enum scroll_direction direction) {
-	sway_log(L_DEBUG, "Mouse wheel scrolled %s", direction == SCROLL_UP ? "up" : "down");
-
-	// If there are status blocks and click_events are enabled
-	// check if the position is within the status area and if so
-	// tell the status line to output the event and skip workspace
-	// switching below.
-	int num_blocks = swaybar.status->block_line->length;
-	if (swaybar.status->click_events && num_blocks > 0) {
-		struct status_block *first_block = swaybar.status->block_line->items[0];
-		int x = window->pointer_input.last_x;
-		int y = window->pointer_input.last_y;
-		if (x > first_block->x) {
-			if (direction == SCROLL_UP) {
-				status_line_mouse_event(&swaybar, x, y, 4);
-			} else {
-				status_line_mouse_event(&swaybar, x, y, 5);
-			}
-			return;
-		}
-	}
-
-	if (!swaybar.config->wrap_scroll) {
-		// Find output this window lives on
-		int i;
-		struct output *output = NULL;
-		for (i = 0; i < swaybar.outputs->length; ++i) {
-			output = swaybar.outputs->items[i];
-			if (output->window == window) {
-				break;
-			}
-		}
-		if (!sway_assert(i != swaybar.outputs->length, "Unknown window in scroll event")) {
-			return;
-		}
-		int focused = -1;
-		for (i = 0; i < output->workspaces->length; ++i) {
-			struct workspace *ws = output->workspaces->items[i];
-			if (ws->focused) {
-				focused = i;
-				break;
-			}
-		}
-		if (!sway_assert(focused != -1, "Scroll wheel event received on inactive output")) {
-			return;
-		}
-		if ((focused == 0 && direction == SCROLL_UP) ||
-				(focused == output->workspaces->length - 1 && direction == SCROLL_DOWN)) {
-			// Do not wrap
-			return;
-		}
-	}
-
-	const char *workspace_name = direction == SCROLL_UP ? "prev_on_output" : "next_on_output";
-	ipc_send_workspace_command(workspace_name);
-}
-
-void bar_setup(struct bar *bar, const char *socket_path, const char *bar_id) {
-	/* initialize bar with default values */
-	bar_init(bar);
-
-	/* Initialize event loop lists */
-	init_event_loop();
-
-	/* connect to sway ipc */
-	bar->ipc_socketfd = ipc_open_socket(socket_path);
-	bar->ipc_event_socketfd = ipc_open_socket(socket_path);
-
-	ipc_bar_init(bar, bar_id);
-
-	int i;
-	for (i = 0; i < bar->outputs->length; ++i) {
-		struct output *bar_output = bar->outputs->items[i];
-
-		bar_output->registry = registry_poll();
-
-		if (!bar_output->registry->desktop_shell) {
-			sway_abort("swaybar requires the compositor to support the desktop-shell extension.");
-		}
-
-		struct output_state *output = bar_output->registry->outputs->items[bar_output->idx];
-
-		bar_output->window = window_setup(bar_output->registry,
-				output->width / output->scale, 30, output->scale, false);
-		if (!bar_output->window) {
-			sway_abort("Failed to create window.");
-		}
-		desktop_shell_set_panel(bar_output->registry->desktop_shell,
-				output->output, bar_output->window->surface);
-		desktop_shell_set_panel_position(bar_output->registry->desktop_shell,
-				bar->config->position);
-
-		window_make_shell(bar_output->window);
-
-		/* set font */
-		bar_output->window->font = bar->config->font;
-
-		/* set mouse event callbacks */
-		bar_output->window->pointer_input.notify_button = mouse_button_notify;
-		bar_output->window->pointer_input.notify_scroll = mouse_scroll_notify;
-
-		/* set window height */
-		set_window_height(bar_output->window, bar->config->height);
-	}
-	/* spawn status command */
-	spawn_status_cmd_proc(bar);
-
-#ifdef ENABLE_TRAY
-	init_tray(bar);
-#endif
-}
-
-bool dirty = true;
-
-static void respond_ipc(int fd, short mask, void *_bar) {
-	struct bar *bar = (struct bar *)_bar;
-	sway_log(L_DEBUG, "Got IPC event.");
-	dirty = handle_ipc_event(bar);
-}
-
-static void respond_command(int fd, short mask, void *_bar) {
-	struct bar *bar = (struct bar *)_bar;
-	dirty = handle_status_line(bar);
-}
-
-static void respond_output(int fd, short mask, void *_output) {
-	struct output *output = (struct output *)_output;
-	if (wl_display_dispatch(output->registry->display) == -1) {
-		sway_log(L_ERROR, "failed to dispatch wl: %d", errno);
-	}
-}
-
-void bar_run(struct bar *bar) {
-	add_event(bar->ipc_event_socketfd, POLLIN, respond_ipc, bar);
-	add_event(bar->status_read_fd, POLLIN, respond_command, bar);
-
-	int i;
-	for (i = 0; i < bar->outputs->length; ++i) {
-		struct output *output = bar->outputs->items[i];
-		add_event(wl_display_get_fd(output->registry->display),
-				POLLIN, respond_output, output);
-	}
-
-	while (1) {
-		if (dirty) {
-			int i;
-			for (i = 0; i < bar->outputs->length; ++i) {
-				struct output *output = bar->outputs->items[i];
-				if (window_prerender(output->window) && output->window->cairo) {
-					render(output, bar->config, bar->status);
-					window_render(output->window);
-					wl_display_flush(output->registry->display);
-				}
-			}
-		}
-
-		dirty = false;
-
-		event_loop_poll();
-#ifdef ENABLE_TRAY
-		dispatch_dbus();
-#endif
-	}
-}
-
-void free_workspaces(list_t *workspaces) {
-	int i;
-	for (i = 0; i < workspaces->length; ++i) {
-		struct workspace *ws = workspaces->items[i];
+void free_workspaces(struct wl_list *list) {
+	struct swaybar_workspace *ws, *tmp;
+	wl_list_for_each_safe(ws, tmp, list, link) {
+		wl_list_remove(&ws->link);
 		free(ws->name);
+		free(ws->label);
 		free(ws);
 	}
-	list_free(workspaces);
 }
 
-static void free_output(struct output *output) {
-	window_teardown(output->window);
-	if (output->registry) {
-		registry_teardown(output->registry);
+static void swaybar_output_free(struct swaybar_output *output) {
+	if (!output) {
+		return;
 	}
-
+	sway_log(SWAY_DEBUG, "Removing output %s", output->name);
+	if (output->layer_surface != NULL) {
+		zwlr_layer_surface_v1_destroy(output->layer_surface);
+	}
+	if (output->surface != NULL) {
+		wl_surface_destroy(output->surface);
+	}
+	if (output->input_region != NULL) {
+		wl_region_destroy(output->input_region);
+	}
+	zxdg_output_v1_destroy(output->xdg_output);
+	wl_output_destroy(output->output);
+	destroy_buffer(&output->buffers[0]);
+	destroy_buffer(&output->buffers[1]);
+	free_hotspots(&output->hotspots);
+	free_workspaces(&output->workspaces);
+	wl_list_remove(&output->link);
 	free(output->name);
-
-	if (output->workspaces) {
-		free_workspaces(output->workspaces);
-	}
-
+	free(output->identifier);
 	free(output);
 }
 
-static void free_outputs(list_t *outputs) {
-	int i;
-	for (i = 0; i < outputs->length; ++i) {
-		free_output(outputs->items[i]);
+static void set_output_dirty(struct swaybar_output *output) {
+	if (output->frame_scheduled) {
+		output->dirty = true;
+	} else if (output->surface) {
+		render_frame(output);
 	}
-	list_free(outputs);
 }
 
-static void terminate_status_command(pid_t pid) {
-	if (pid) {
-		// terminate status_command process
-		int ret = kill(pid, SIGTERM);
-		if (ret != 0) {
-			sway_log(L_ERROR, "Unable to terminate status_command [pid: %d]", pid);
-		} else {
-			int status;
-			waitpid(pid, &status, 0);
+static void layer_surface_configure(void *data,
+		struct zwlr_layer_surface_v1 *surface,
+		uint32_t serial, uint32_t width, uint32_t height) {
+	struct swaybar_output *output = data;
+	output->width = width;
+	output->height = height;
+	zwlr_layer_surface_v1_ack_configure(surface, serial);
+	set_output_dirty(output);
+}
+
+static void layer_surface_closed(void *_output,
+		struct zwlr_layer_surface_v1 *surface) {
+	struct swaybar_output *output = _output;
+	swaybar_output_free(output);
+}
+
+struct zwlr_layer_surface_v1_listener layer_surface_listener = {
+	.configure = layer_surface_configure,
+	.closed = layer_surface_closed,
+};
+
+static void add_layer_surface(struct swaybar_output *output) {
+	if (output->layer_surface) {
+		return;
+	}
+	struct swaybar *bar = output->bar;
+
+	struct swaybar_config *config = bar->config;
+	bool hidden = strcmp(config->mode, "hide") == 0;
+	bool overlay = !hidden && strcmp(config->mode, "overlay") == 0;
+	output->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
+			bar->layer_shell, output->surface, output->output,
+			hidden || overlay ? ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY :
+			ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, "panel");
+	assert(output->layer_surface);
+	zwlr_layer_surface_v1_add_listener(output->layer_surface,
+			&layer_surface_listener, output);
+
+	if (overlay) {
+		// Empty input region
+		output->input_region = wl_compositor_create_region(bar->compositor);
+		assert(output->input_region);
+
+		wl_surface_set_input_region(output->surface, output->input_region);
+	}
+
+	zwlr_layer_surface_v1_set_anchor(output->layer_surface, config->position);
+	if (hidden || overlay) {
+		zwlr_layer_surface_v1_set_exclusive_zone(output->layer_surface, -1);
+	}
+}
+
+static void destroy_layer_surface(struct swaybar_output *output) {
+	if (!output->layer_surface) {
+		return;
+	}
+	zwlr_layer_surface_v1_destroy(output->layer_surface);
+	wl_surface_attach(output->surface, NULL, 0, 0); // detach buffer
+	output->layer_surface = NULL;
+	output->width = 0;
+	output->frame_scheduled = false;
+}
+
+void set_bar_dirty(struct swaybar *bar) {
+	struct swaybar_output *output;
+	wl_list_for_each(output, &bar->outputs, link) {
+		set_output_dirty(output);
+	}
+}
+
+bool determine_bar_visibility(struct swaybar *bar, bool moving_layer) {
+	struct swaybar_config *config = bar->config;
+	bool visible = !(strcmp(config->mode, "invisible") == 0 ||
+		(strcmp(config->mode, config->hidden_state) == 0 // both "hide"
+			&& !bar->visible_by_modifier && !bar->visible_by_urgency));
+
+	// Create/destroy layer surfaces as needed
+	struct swaybar_output *output;
+	wl_list_for_each(output, &bar->outputs, link) {
+		// When moving to a different layer, we need to destroy and re-create
+		// the layer surface
+		if (!visible || moving_layer) {
+			destroy_layer_surface(output);
+		}
+
+		if (visible) {
+			add_layer_surface(output);
+		}
+	}
+	set_bar_dirty(bar);
+
+	if (visible != bar->visible) {
+		bar->visible = visible;
+
+		if (bar->status) {
+			sway_log(SWAY_DEBUG, "Sending %s signal to status command",
+					visible ? "cont" : "stop");
+			kill(bar->status->pid, visible ?
+					bar->status->cont_signal : bar->status->stop_signal);
+		}
+	}
+
+	return visible;
+}
+
+static bool bar_uses_output(struct swaybar_output *output) {
+	if (output->bar->config->all_outputs) {
+		return true;
+	}
+	char *identifier = output->identifier;
+	struct config_output *coutput;
+	wl_list_for_each(coutput, &output->bar->config->outputs, link) {
+		if (strcmp(coutput->name, output->name) == 0 ||
+				(identifier && strcmp(coutput->name, identifier) == 0)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static void output_geometry(void *data, struct wl_output *wl_output, int32_t x,
+		int32_t y, int32_t width_mm, int32_t height_mm, int32_t subpixel,
+		const char *make, const char *model, int32_t transform) {
+	struct swaybar_output *output = data;
+	output->subpixel = subpixel;
+}
+
+static void output_mode(void *data, struct wl_output *wl_output, uint32_t flags,
+		int32_t width, int32_t height, int32_t refresh) {
+	// Who cares
+}
+
+static void output_done(void *data, struct wl_output *wl_output) {
+	struct swaybar_output *output = data;
+	set_output_dirty(output);
+}
+
+static void output_scale(void *data, struct wl_output *wl_output,
+		int32_t factor) {
+	struct swaybar_output *output = data;
+	output->scale = factor;
+	if (output == output->bar->pointer.current) {
+		update_cursor(output->bar);
+		render_frame(output);
+	}
+}
+
+struct wl_output_listener output_listener = {
+	.geometry = output_geometry,
+	.mode = output_mode,
+	.done = output_done,
+	.scale = output_scale,
+};
+
+static void xdg_output_handle_logical_position(void *data,
+		struct zxdg_output_v1 *xdg_output, int32_t x, int32_t y) {
+	struct swaybar_output *output = data;
+	output->output_x = x;
+	output->output_y = y;
+}
+
+static void xdg_output_handle_logical_size(void *data,
+		struct zxdg_output_v1 *xdg_output, int32_t width, int32_t height) {
+	struct swaybar_output *output = data;
+	output->output_height = height;
+	output->output_width = width;
+}
+
+static void xdg_output_handle_done(void *data,
+		struct zxdg_output_v1 *xdg_output) {
+	struct swaybar_output *output = data;
+	struct swaybar *bar = output->bar;
+
+	assert(output->name != NULL);
+	if (!bar_uses_output(output)) {
+		swaybar_output_free(output);
+		return;
+	}
+
+	if (wl_list_empty(&output->link)) {
+		wl_list_remove(&output->link);
+		wl_list_insert(&bar->outputs, &output->link);
+
+		output->surface = wl_compositor_create_surface(bar->compositor);
+		assert(output->surface);
+
+		determine_bar_visibility(bar, false);
+	}
+}
+
+static void xdg_output_handle_name(void *data,
+		struct zxdg_output_v1 *xdg_output, const char *name) {
+	struct swaybar_output *output = data;
+	free(output->name);
+	output->name = strdup(name);
+}
+
+static void xdg_output_handle_description(void *data,
+		struct zxdg_output_v1 *xdg_output, const char *description) {
+	// wlroots currently sets the description to `make model serial (name)`
+	// If this changes in the future, this will need to be modified.
+	struct swaybar_output *output = data;
+	free(output->identifier);
+	output->identifier = NULL;
+	char *paren = strrchr(description, '(');
+	if (paren) {
+		size_t length = paren - description;
+		output->identifier = malloc(length);
+		if (!output->identifier) {
+			sway_log(SWAY_ERROR, "Failed to allocate output identifier");
+			return;
+		}
+		strncpy(output->identifier, description, length);
+		output->identifier[length - 1] = '\0';
+	}
+}
+
+struct zxdg_output_v1_listener xdg_output_listener = {
+	.logical_position = xdg_output_handle_logical_position,
+	.logical_size = xdg_output_handle_logical_size,
+	.done = xdg_output_handle_done,
+	.name = xdg_output_handle_name,
+	.description = xdg_output_handle_description,
+};
+
+static void add_xdg_output(struct swaybar_output *output) {
+	if (output->xdg_output != NULL) {
+		return;
+	}
+	assert(output->bar->xdg_output_manager != NULL);
+	output->xdg_output = zxdg_output_manager_v1_get_xdg_output(
+		output->bar->xdg_output_manager, output->output);
+	zxdg_output_v1_add_listener(output->xdg_output, &xdg_output_listener,
+		output);
+}
+
+static void handle_global(void *data, struct wl_registry *registry,
+		uint32_t name, const char *interface, uint32_t version) {
+	struct swaybar *bar = data;
+	if (strcmp(interface, wl_compositor_interface.name) == 0) {
+		bar->compositor = wl_registry_bind(registry, name,
+				&wl_compositor_interface, 4);
+	} else if (strcmp(interface, wl_seat_interface.name) == 0) {
+		bar->seat = wl_registry_bind(registry, name,
+				&wl_seat_interface, 3);
+		wl_seat_add_listener(bar->seat, &seat_listener, bar);
+	} else if (strcmp(interface, wl_shm_interface.name) == 0) {
+		bar->shm = wl_registry_bind(registry, name,
+				&wl_shm_interface, 1);
+	} else if (strcmp(interface, wl_output_interface.name) == 0) {
+		struct swaybar_output *output =
+			calloc(1, sizeof(struct swaybar_output));
+		output->bar = bar;
+		output->output = wl_registry_bind(registry, name,
+				&wl_output_interface, 3);
+		wl_output_add_listener(output->output, &output_listener, output);
+		output->scale = 1;
+		output->wl_name = name;
+		wl_list_init(&output->workspaces);
+		wl_list_init(&output->hotspots);
+		wl_list_init(&output->link);
+		if (bar->xdg_output_manager != NULL) {
+			add_xdg_output(output);
+		}
+	} else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
+		bar->layer_shell = wl_registry_bind(
+				registry, name, &zwlr_layer_shell_v1_interface, 1);
+	} else if (strcmp(interface, zxdg_output_manager_v1_interface.name) == 0) {
+		bar->xdg_output_manager = wl_registry_bind(registry, name,
+			&zxdg_output_manager_v1_interface, 2);
+	}
+}
+
+static void handle_global_remove(void *data, struct wl_registry *registry,
+		uint32_t name) {
+	struct swaybar *bar = data;
+	struct swaybar_output *output, *tmp;
+	wl_list_for_each_safe(output, tmp, &bar->outputs, link) {
+		if (output->wl_name == name) {
+			swaybar_output_free(output);
+			break;
 		}
 	}
 }
 
-void bar_teardown(struct bar *bar) {
+static const struct wl_registry_listener registry_listener = {
+	.global = handle_global,
+	.global_remove = handle_global_remove,
+};
+
+bool bar_setup(struct swaybar *bar, const char *socket_path) {
+	bar->visible = true;
+	bar->config = init_config();
+	wl_list_init(&bar->outputs);
+	bar->eventloop = loop_create();
+
+	bar->ipc_socketfd = ipc_open_socket(socket_path);
+	bar->ipc_event_socketfd = ipc_open_socket(socket_path);
+	if (!ipc_initialize(bar)) {
+		return false;
+	}
+	if (bar->config->status_command) {
+		bar->status = status_line_init(bar->config->status_command);
+		bar->status->bar = bar;
+	}
+
+	bar->display = wl_display_connect(NULL);
+	if (!bar->display) {
+		sway_abort("Unable to connect to the compositor. "
+				"If your compositor is running, check or set the "
+				"WAYLAND_DISPLAY environment variable.");
+	}
+
+	struct wl_registry *registry = wl_display_get_registry(bar->display);
+	wl_registry_add_listener(registry, &registry_listener, bar);
+	wl_display_roundtrip(bar->display);
+	assert(bar->compositor && bar->layer_shell && bar->shm &&
+		bar->xdg_output_manager);
+
+	// Second roundtrip for xdg-output
+	wl_display_roundtrip(bar->display);
+
+	struct swaybar_pointer *pointer = &bar->pointer;
+	pointer->cursor_surface = wl_compositor_create_surface(bar->compositor);
+	assert(pointer->cursor_surface);
+
+#if HAVE_TRAY
+	if (!bar->config->tray_hidden) {
+		bar->tray = create_tray(bar);
+	}
+#endif
+
+	if (bar->config->workspace_buttons) {
+		ipc_get_workspaces(bar);
+	}
+	determine_bar_visibility(bar, false);
+	return true;
+}
+
+static void display_in(int fd, short mask, void *data) {
+	struct swaybar *bar = data;
+	if (wl_display_dispatch(bar->display) == -1) {
+		bar->running = false;
+	}
+}
+
+static void ipc_in(int fd, short mask, void *data) {
+	struct swaybar *bar = data;
+	if (handle_ipc_readable(bar)) {
+		set_bar_dirty(bar);
+	}
+}
+
+static void status_in(int fd, short mask, void *data) {
+	struct swaybar *bar = data;
+	if (mask & (POLLHUP | POLLERR)) {
+		status_error(bar->status, "[error reading from status command]");
+		set_bar_dirty(bar);
+		loop_remove_fd(bar->eventloop, fd);
+	} else if (status_handle_readable(bar->status)) {
+		set_bar_dirty(bar);
+	}
+}
+
+void bar_run(struct swaybar *bar) {
+	loop_add_fd(bar->eventloop, wl_display_get_fd(bar->display), POLLIN,
+			display_in, bar);
+	loop_add_fd(bar->eventloop, bar->ipc_event_socketfd, POLLIN, ipc_in, bar);
+	if (bar->status) {
+		loop_add_fd(bar->eventloop, bar->status->read_fd, POLLIN,
+				status_in, bar);
+	}
+#if HAVE_TRAY
+	if (bar->tray) {
+		loop_add_fd(bar->eventloop, bar->tray->fd, POLLIN, tray_in, bar->tray->bus);
+	}
+#endif
+	while (bar->running) {
+		errno = 0;
+		if (wl_display_flush(bar->display) == -1 && errno != EAGAIN) {
+			break;
+		}
+		loop_poll(bar->eventloop);
+	}
+}
+
+static void free_outputs(struct wl_list *list) {
+	struct swaybar_output *output, *tmp;
+	wl_list_for_each_safe(output, tmp, list, link) {
+		swaybar_output_free(output);
+	}
+}
+
+void bar_teardown(struct swaybar *bar) {
+#if HAVE_TRAY
+	destroy_tray(bar->tray);
+#endif
+	free_outputs(&bar->outputs);
 	if (bar->config) {
 		free_config(bar->config);
 	}
-
-	if (bar->outputs) {
-		free_outputs(bar->outputs);
-	}
-
+	close(bar->ipc_event_socketfd);
+	close(bar->ipc_socketfd);
 	if (bar->status) {
-		free_status_line(bar->status);
+		status_line_free(bar->status);
 	}
-
-	/* close sockets/pipes */
-	if (bar->status_read_fd) {
-		close(bar->status_read_fd);
-	}
-
-	if (bar->status_write_fd) {
-		close(bar->status_write_fd);
-	}
-
-	if (bar->ipc_socketfd) {
-		close(bar->ipc_socketfd);
-	}
-
-	if (bar->ipc_event_socketfd) {
-		close(bar->ipc_event_socketfd);
-	}
-
-	/* terminate status command process */
-	terminate_status_command(bar->status_command_pid);
+	free(bar->id);
+	free(bar->mode);
 }
