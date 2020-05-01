@@ -17,7 +17,16 @@ struct seatop_resize_floating_event {
 	double ref_con_lx, ref_con_ly; // container's x/y at start of op
 };
 
-static void handle_motion(struct sway_seat *seat, uint32_t time_msec) {
+static void handle_button(struct sway_seat *seat, uint32_t time_msec,
+		struct wlr_input_device *device, uint32_t button,
+		enum wlr_button_state state) {
+	if (seat->cursor->pressed_button_count == 0) {
+		seatop_begin_default(seat);
+	}
+}
+
+static void handle_motion(struct sway_seat *seat, uint32_t time_msec,
+		double dx, double dy) {
 	struct seatop_resize_floating_event *e = seat->seatop_data;
 	struct sway_container *con = e->con;
 	enum wlr_edges edge = e->edge;
@@ -64,6 +73,12 @@ static void handle_motion(struct sway_seat *seat, uint32_t time_msec) {
 		height = fmax(view_min_height, fmin(height, view_max_height));
 	}
 
+	struct sway_container_state *state = &con->current;
+	width += state->border_thickness * 2;
+	height += config->titlebar_border_thickness * 2;
+	height += container_titlebar_height();
+	height += config->titlebar_v_padding;
+
 	// Recalculate these, in case we hit a min/max limit
 	grow_width = width - e->ref_width;
 	grow_height = height - e->ref_height;
@@ -107,31 +122,22 @@ static void handle_motion(struct sway_seat *seat, uint32_t time_msec) {
 	arrange_container(con);
 }
 
-static void handle_finish(struct sway_seat *seat, uint32_t time_msec) {
-	cursor_set_image(seat->cursor, "left_ptr", NULL);
-}
-
-static void handle_abort(struct sway_seat *seat) {
-	cursor_set_image(seat->cursor, "left_ptr", NULL);
-}
-
 static void handle_unref(struct sway_seat *seat, struct sway_container *con) {
 	struct seatop_resize_floating_event *e = seat->seatop_data;
 	if (e->con == con) {
-		seatop_abort(seat);
+		seatop_begin_default(seat);
 	}
 }
 
 static const struct sway_seatop_impl seatop_impl = {
+	.button = handle_button,
 	.motion = handle_motion,
-	.finish = handle_finish,
-	.abort = handle_abort,
 	.unref = handle_unref,
 };
 
 void seatop_begin_resize_floating(struct sway_seat *seat,
-		struct sway_container *con, uint32_t button, enum wlr_edges edge) {
-	seatop_abort(seat);
+		struct sway_container *con, enum wlr_edges edge) {
+	seatop_end(seat);
 
 	struct seatop_resize_floating_event *e =
 		calloc(1, sizeof(struct seatop_resize_floating_event));
@@ -154,11 +160,11 @@ void seatop_begin_resize_floating(struct sway_seat *seat,
 
 	seat->seatop_impl = &seatop_impl;
 	seat->seatop_data = e;
-	seat->seatop_button = button;
 
 	container_raise_floating(con);
 
 	const char *image = edge == WLR_EDGE_NONE ?
 		"se-resize" : wlr_xcursor_get_resize_name(edge);
 	cursor_set_image(seat->cursor, image, NULL);
+	wlr_seat_pointer_clear_focus(seat->wlr_seat);
 }

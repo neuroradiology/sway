@@ -1,3 +1,4 @@
+#include <float.h>
 #include <strings.h>
 #include <wlr/types/wlr_output_layout.h>
 #include "log.h"
@@ -12,6 +13,50 @@
 #include "sway/tree/workspace.h"
 #include "stringop.h"
 #include "util.h"
+
+static bool get_direction_from_next_prev(struct sway_container *container,
+		struct sway_seat *seat, const char *name, enum wlr_direction *out) {
+	enum sway_container_layout parent_layout = L_NONE;
+	if (container) {
+		parent_layout = container_parent_layout(container);
+	}
+
+	if (strcasecmp(name, "prev") == 0) {
+		switch (parent_layout) {
+		case L_HORIZ:
+		case L_TABBED:
+			*out = WLR_DIRECTION_LEFT;
+			break;
+		case L_VERT:
+		case L_STACKED:
+			*out = WLR_DIRECTION_UP;
+			break;
+		case L_NONE:
+			return true;
+		default:
+			return false;
+		}
+	} else if (strcasecmp(name, "next") == 0) {
+		switch (parent_layout) {
+		case L_HORIZ:
+		case L_TABBED:
+			*out = WLR_DIRECTION_RIGHT;
+			break;
+		case L_VERT:
+		case L_STACKED:
+			*out = WLR_DIRECTION_DOWN;
+			break;
+		case L_NONE:
+			return true;
+		default:
+			return false;
+		}
+	} else {
+		return false;
+	}
+	 
+	return true;
+}
 
 static bool parse_direction(const char *name,
 		enum wlr_direction *out) {
@@ -90,8 +135,9 @@ static struct sway_node *get_node_in_output_direction(
 	return &ws->node;
 }
 
-static struct sway_node *node_get_in_direction(struct sway_container *container,
-		struct sway_seat *seat, enum wlr_direction dir) {
+static struct sway_node *node_get_in_direction_tiling(
+		struct sway_container *container, struct sway_seat *seat,
+		enum wlr_direction dir, bool descend) {
 	struct sway_container *wrap_candidate = NULL;
 	struct sway_container *current = container;
 	while (current) {
@@ -146,9 +192,13 @@ static struct sway_node *node_get_in_direction(struct sway_container *container,
 				}
 			} else {
 				struct sway_container *desired_con = siblings->items[desired];
-				struct sway_container *c = seat_get_focus_inactive_view(
-						seat, &desired_con->node);
-				return &c->node;
+				if (!descend) {
+					return &desired_con->node;
+				} else {
+					struct sway_container *c = seat_get_focus_inactive_view(
+							seat, &desired_con->node);
+					return &c->node;
+				}
 			}
 		}
 
@@ -158,7 +208,8 @@ static struct sway_node *node_get_in_direction(struct sway_container *container,
 	// Check a different output
 	struct sway_output *output = container->workspace->output;
 	struct sway_output *new_output = output_get_in_direction(output, dir);
-	if (new_output) {
+	if ((config->focus_wrapping != WRAP_WORKSPACE ||
+				container->node.type == N_WORKSPACE) && new_output) {
 		return get_node_in_output_direction(new_output, dir);
 	}
 
@@ -170,6 +221,41 @@ static struct sway_node *node_get_in_direction(struct sway_container *container,
 	}
 
 	return NULL;
+}
+
+static struct sway_node *node_get_in_direction_floating(
+		struct sway_container *con, struct sway_seat *seat,
+		enum wlr_direction dir) {
+	double ref_lx = con->x + con->width / 2;
+	double ref_ly = con->y + con->height / 2;
+	double closest_distance = DBL_MAX;
+	struct sway_container *closest_con = NULL;
+
+	if (!con->workspace) {
+		return NULL;
+	}
+
+	for (int i = 0; i < con->workspace->floating->length; i++) {
+		struct sway_container *floater = con->workspace->floating->items[i];
+		if (floater == con) {
+			continue;
+		}
+		float distance = dir == WLR_DIRECTION_LEFT || dir == WLR_DIRECTION_RIGHT
+			? (floater->x + floater->width / 2) - ref_lx
+			: (floater->y + floater->height / 2) - ref_ly;
+		if (dir == WLR_DIRECTION_LEFT || dir == WLR_DIRECTION_UP) {
+			distance = -distance;
+		}
+		if (distance < 0) {
+			continue;
+		}
+		if (distance < closest_distance) {
+			closest_distance = distance;
+			closest_con = floater;
+		}
+	}
+
+	return closest_con ? &closest_con->node : NULL;
 }
 
 static struct cmd_results *focus_mode(struct sway_workspace *ws,
@@ -208,6 +294,11 @@ static struct cmd_results *focus_output(struct sway_seat *seat,
 				"There is no output with that name");
 		}
 		struct sway_workspace *ws = seat_get_focused_workspace(seat);
+		if (!ws) {
+			free(identifier);
+			return cmd_results_new(CMD_FAILURE,
+				"No focused workspace to base directions off of");
+		}
 		output = output_get_in_direction(ws->output, direction);
 
 		if (!output) {
@@ -274,11 +365,12 @@ struct cmd_results *cmd_focus(int argc, char **argv) {
 	}
 
 	if (argc == 0 && container) {
-		if (container_is_scratchpad_hidden(container)) {
+		if (container_is_scratchpad_hidden_or_child(container)) {
 			root_scratchpad_show(container);
 		}
 		seat_set_focus_container(seat, container);
 		seat_consider_warp_to_focus(seat);
+		container_raise_floating(container);
 		return cmd_results_new(CMD_SUCCESS, NULL);
 	}
 
@@ -304,10 +396,19 @@ struct cmd_results *cmd_focus(int argc, char **argv) {
 	}
 
 	enum wlr_direction direction = 0;
+	bool descend = true;
 	if (!parse_direction(argv[0], &direction)) {
-		return cmd_results_new(CMD_INVALID,
-			"Expected 'focus <direction|parent|child|mode_toggle|floating|tiling>' "
-			"or 'focus output <direction|name>'");
+		if (!get_direction_from_next_prev(container, seat, argv[0], &direction)) {
+			return cmd_results_new(CMD_INVALID,
+				"Expected 'focus <direction|next|prev|parent|child|mode_toggle|floating|tiling>' "
+				"or 'focus output <direction|name>'");
+		} else if (argc == 2 && strcasecmp(argv[1], "sibling") == 0) {
+			descend = false;
+		}
+	}
+
+	if (!direction) {
+		return cmd_results_new(CMD_SUCCESS, NULL);
 	}
 
 	if (node->type == N_WORKSPACE) {
@@ -325,11 +426,22 @@ struct cmd_results *cmd_focus(int argc, char **argv) {
 		return cmd_results_new(CMD_SUCCESS, NULL);
 	}
 
-	struct sway_node *next_focus =
-		node_get_in_direction(container, seat, direction);
+	if (!sway_assert(container, "Expected container to be non null")) {
+		return cmd_results_new(CMD_FAILURE, "");
+	}
+	struct sway_node *next_focus = NULL;
+	if (container_is_floating(container)) {
+		next_focus = node_get_in_direction_floating(container, seat, direction);
+	} else {
+		next_focus = node_get_in_direction_tiling(container, seat, direction, descend);
+	}
 	if (next_focus) {
 		seat_set_focus(seat, next_focus);
 		seat_consider_warp_to_focus(seat);
+
+		if (next_focus->type == N_CONTAINER) {
+			container_raise_floating(next_focus->sway_container);
+		}
 	}
 
 	return cmd_results_new(CMD_SUCCESS, NULL);

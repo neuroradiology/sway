@@ -1,83 +1,68 @@
 # sway
 
-Sway на данный момент **(в разработке)** i3-совместимый
-[Wayland](http://wayland.freedesktop.org/) композитор.  Прочитайте
-[FAQ](https://github.com/swaywm/sway/wiki). Присоединяйтесь к [IRC
-каналу](http://webchat.freenode.net/?channels=sway&uio=d4) (#sway на
+sway - это [i3](https://i3wm.org/)-совместимый композитор [Wayland](http://wayland.freedesktop.org/).
+Больше информации в [FAQ](https://github.com/swaywm/sway/wiki). Присоединяйтесь к
+[IRC-каналу](http://webchat.freenode.net/?channels=sway&uio=d4) (#sway на
 irc.freenode.net).
 
-[![](https://sr.ht/ICd5.png)](https://sr.ht/ICd5.png)
+Если вы хотите поддержать разработку sway, сделайте пожертвование SirCmpwn на
+[странице Patreon](https://patreon.com/sircmpwn).
 
-При желании поддержать разработку Sway вы можете пожертвовать [автору
-на его Patreon странице](https://patreon.com/sircmpwn) или взяться
-за разработку определённых целей в обмен на [награду](https://github.com/swaywm/sway/issues/986).
+## Подписи релизов
 
-Вы также можете объявить свою награду за определённую цель и больше всего для этого подходит Patreon.
-
-## Помощь
-
-DarkReef оказывает поддержку на русском языке в IRC канале и на GitHub в часовом поясе UTC +05:00.
-Если у вас есть желание помочь с переводом на русский язык, то, пожалуйста, ознакомьтесь с [подсказками для переводчиков](https://github.com/swaywm/sway/issues/1318). На этой же странице можно узнать [статус перевода](https://github.com/swaywm/sway/issues/1318#issuecomment-326913020).
-
-## Подпись версий
-
-Версии подписаны ключом [B22DA89A](http://pgp.mit.edu/pks/lookup?op=vindex&search=0x52CB6609B22DA89A)
-и опубликованы [на GitHub'е](https://github.com/swaywm/sway/releases).
+Релизы подписываются ключом [B22DA89A](http://pgp.mit.edu/pks/lookup?op=vindex&search=0x52CB6609B22DA89A)
+и публикуются [на GitHub](https://github.com/swaywm/sway/releases).
 
 ## Установка
 
-### Из пакета
+### Из репозиториев
 
-Sway доступен во многих дистрибутивах и находится в официальных репозиториях. Попробуйте установить "sway" через ваш пакетный менеджер.
-В случае, если это не представляется возможным, то обратитесь к [этой странице](https://github.com/swaywm/sway/wiki/Unsupported-packages)
-для получения инструкций по установке для вашего дистрибутива.
+sway доступен во многих дистрибутивах. Попробуйте установить пакет "sway".
+Если он вдруг недоступен, проверьте [эту страницу на wiki](https://github.com/swaywm/sway/wiki/Unsupported-packages)
+для получения информации о подробностях установки для вашего
+дистрибутива.
 
-Если вы заинтересованы в создании пакета "sway" в вашем дистрибутиве, то сообщите об этом в IRC
-канале или отправьте письмо [sir@cmpwn.com](mailto:sir@cmpwn.com).
+Если вы заинтересованы поддерживать sway в вашем дистрибутиве, загляните в наш IRC-канал
+или обратитесь на sir@cmpwn.com за советом.
 
 ### Сборка из исходников
 
-Установите следующие пакеты:
+Установите зависимости:
 
-* meson
-* [wlc](https://github.com/Cloudef/wlc)
+* meson \*
+* [wlroots](https://github.com/swaywm/wlroots)
 * wayland
-* xwayland
-* libinput >= 1.6.0
-* libcap
+* wayland-protocols \*
 * pcre
-* json-c >= 0.13
+* json-c
 * pango
 * cairo
-* gdk-pixbuf2 *
-* dbus >= 1.10 **
-* [scdoc](https://git.sr.ht/~sircmpwn/scdoc) (required for man pages)
-* git
+* gdk-pixbuf2 (необязательно: для работы трея)
+* [scdoc](https://git.sr.ht/~sircmpwn/scdoc) (необязательно: для сборки man-страниц) \*
+* git \*
 
-_\*Требуется только для swaybar, swaybg_
+_\*Зависимости для сборки_
 
-_\*\*Требуется только для tray_
-
-Выполните следующие команды:
+Выполните эти команды:
 
     meson build
     ninja -C build
     sudo ninja -C build install
 
-Если у вас logind:
-
-    sudo setcap "cap_sys_ptrace,cap_sys_tty_config=eip" /usr/local/bin/sway
-
-Иначе:
+На системах без logind вам понадобится добавить suid к файлу программы sway:
 
     sudo chmod a+s /usr/local/bin/sway
 
+sway сбросит root-права при запуске.
+
 ## Настройка
 
-Если вы уже используете i3, тогда просто скопируйте ваш конфиг в `~/.config/sway/config`.
-В любом другом случае, скопируйте `/etc/sway/config` в `~/.config/sway/config`.
-Для более детальной информации о настройке: `man 5 sway`.
+Если вы уже используете i3, скопируйте ваш конфигурационный файл i3 в `~/.config/sway/config`, и
+он сразу же заработает. В противном случае, скопируйте образец конфигурационного файла в
+`~/.config/sway/config`. Обычно он располагается в `/etc/sway/config`.
+Запустите `man 5 sway` для изучения информации о настройке.
 
 ## Запуск
 
-Выполните 'sway' в терминале. **Некоторые** менеджеры сессий могут работать, но не поддерживаются sway (к примеру, gdm работает со sway без проблем).
+Выполните команду `sway` прямо из TTY. Некоторые дисплейные менеджеры могут работать, но они не поддерживаются со стороны
+sway (gdm работает довольно неплохо).

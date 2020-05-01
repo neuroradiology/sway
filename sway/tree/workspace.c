@@ -54,21 +54,6 @@ struct sway_output *workspace_get_initial_output(const char *name) {
 	return root->outputs->length ? root->outputs->items[0] : root->noop_output;
 }
 
-static void prevent_invalid_outer_gaps(struct sway_workspace *ws) {
-	if (ws->gaps_outer.top < -ws->gaps_inner) {
-		ws->gaps_outer.top = -ws->gaps_inner;
-	}
-	if (ws->gaps_outer.right < -ws->gaps_inner) {
-		ws->gaps_outer.right = -ws->gaps_inner;
-	}
-	if (ws->gaps_outer.bottom < -ws->gaps_inner) {
-		ws->gaps_outer.bottom = -ws->gaps_inner;
-	}
-	if (ws->gaps_outer.left < -ws->gaps_inner) {
-		ws->gaps_outer.left = -ws->gaps_inner;
-	}
-}
-
 struct sway_workspace *workspace_create(struct sway_output *output,
 		const char *name) {
 	if (output == NULL) {
@@ -111,9 +96,6 @@ struct sway_workspace *workspace_create(struct sway_output *output,
 			if (wsc->gaps_inner != INT_MIN) {
 				ws->gaps_inner = wsc->gaps_inner;
 			}
-			// Since default outer gaps can be smaller than the negation of
-			// workspace specific inner gaps, check outer gaps again
-			prevent_invalid_outer_gaps(ws);
 
 			// Add output priorities
 			for (int i = 0; i < wsc->outputs->length; ++i) {
@@ -173,9 +155,19 @@ void workspace_consider_destroy(struct sway_workspace *ws) {
 	if (ws->tiling->length || ws->floating->length) {
 		return;
 	}
+
 	if (ws->output && output_get_active_workspace(ws->output) == ws) {
 		return;
 	}
+
+	struct sway_seat *seat;
+	wl_list_for_each(seat, &server.input->seats, link) {
+		struct sway_node *node = seat_get_focus_inactive(seat, &root->node);
+		if (node == &ws->node) {
+			return;
+		}
+	}
+
 	workspace_begin_destroy(ws);
 }
 
@@ -212,9 +204,9 @@ static void workspace_name_from_binding(const struct sway_binding * binding,
 	char *name = NULL;
 
 	// workspace n
-	char *cmd = argsep(&cmdlist, " ");
+	char *cmd = argsep(&cmdlist, " ", NULL);
 	if (cmdlist) {
-		name = argsep(&cmdlist, ",;");
+		name = argsep(&cmdlist, ",;", NULL);
 	}
 
 	// TODO: support "move container to workspace" bindings as well
@@ -368,13 +360,13 @@ struct sway_workspace *workspace_by_name(const char *name) {
 	struct sway_seat *seat = input_manager_current_seat();
 	struct sway_workspace *current = seat_get_focused_workspace(seat);
 
-	if (strcmp(name, "prev") == 0) {
+	if (current && strcmp(name, "prev") == 0) {
 		return workspace_prev(current);
-	} else if (strcmp(name, "prev_on_output") == 0) {
+	} else if (current && strcmp(name, "prev_on_output") == 0) {
 		return workspace_output_prev(current, false);
-	} else if (strcmp(name, "next") == 0) {
+	} else if (current && strcmp(name, "next") == 0) {
 		return workspace_next(current);
-	} else if (strcmp(name, "next_on_output") == 0) {
+	} else if (current && strcmp(name, "next_on_output") == 0) {
 		return workspace_output_next(current, false);
 	} else if (strcmp(name, "current") == 0) {
 		return current;
@@ -399,6 +391,11 @@ static struct sway_workspace *workspace_output_prev_next_impl(
 		struct sway_output *output, int dir, bool create) {
 	struct sway_seat *seat = input_manager_current_seat();
 	struct sway_workspace *workspace = seat_get_focused_workspace(seat);
+	if (!workspace) {
+		sway_log(SWAY_DEBUG,
+				"No focused workspace to base prev/next on output off of");
+		return NULL;
+	}
 
 	int index = list_find(output->workspaces, workspace);
 	if (!workspace_is_empty(workspace) && create &&
@@ -476,18 +473,6 @@ bool workspace_switch(struct sway_workspace *workspace,
 			workspace_create(NULL, seat->prev_workspace_name);
 	}
 
-	if (active_ws && (!seat->prev_workspace_name ||
-			(strcmp(seat->prev_workspace_name, active_ws->name)
-				&& active_ws != workspace))) {
-		free(seat->prev_workspace_name);
-		seat->prev_workspace_name = malloc(strlen(active_ws->name) + 1);
-		if (!seat->prev_workspace_name) {
-			sway_log(SWAY_ERROR, "Unable to allocate previous workspace name");
-			return false;
-		}
-		strcpy(seat->prev_workspace_name, active_ws->name);
-	}
-
 	sway_log(SWAY_DEBUG, "Switching to workspace %p:%s",
 		workspace, workspace->name);
 	struct sway_node *next = seat_get_focus_inactive(seat, &workspace->node);
@@ -521,22 +506,31 @@ bool workspace_is_empty(struct sway_workspace *ws) {
 }
 
 static int find_output(const void *id1, const void *id2) {
-	return strcmp(id1, id2) ? 0 : 1;
+	return strcmp(id1, id2);
+}
+
+static int workspace_output_get_priority(struct sway_workspace *ws,
+		struct sway_output *output) {
+	char identifier[128];
+	output_get_identifier(identifier, sizeof(identifier), output);
+	int index_id = list_seq_find(ws->output_priority, find_output, identifier);
+	int index_name = list_seq_find(ws->output_priority, find_output,
+			output->wlr_output->name);
+	return index_name < 0 || index_id < index_name ? index_id : index_name;
 }
 
 void workspace_output_raise_priority(struct sway_workspace *ws,
 		struct sway_output *old_output, struct sway_output *output) {
-	int old_index = list_seq_find(ws->output_priority, find_output,
-			old_output->wlr_output->name);
+	int old_index = workspace_output_get_priority(ws, old_output);
 	if (old_index < 0) {
 		return;
 	}
 
-	int new_index = list_seq_find(ws->output_priority, find_output,
-			output->wlr_output->name);
+	int new_index = workspace_output_get_priority(ws, output);
 	if (new_index < 0) {
-		list_insert(ws->output_priority, old_index,
-				strdup(output->wlr_output->name));
+		char identifier[128];
+		output_get_identifier(identifier, sizeof(identifier), output);
+		list_insert(ws->output_priority, old_index, strdup(identifier));
 	} else if (new_index > old_index) {
 		char *name = ws->output_priority->items[new_index];
 		list_del(ws->output_priority, new_index);
@@ -546,10 +540,10 @@ void workspace_output_raise_priority(struct sway_workspace *ws,
 
 void workspace_output_add_priority(struct sway_workspace *workspace,
 		struct sway_output *output) {
-	int index = list_seq_find(workspace->output_priority,
-			find_output, output->wlr_output->name);
-	if (index < 0) {
-		list_add(workspace->output_priority, strdup(output->wlr_output->name));
+	if (workspace_output_get_priority(workspace, output) < 0) {
+		char identifier[128];
+		output_get_identifier(identifier, sizeof(identifier), output);
+		list_add(workspace->output_priority, strdup(identifier));
 	}
 }
 
@@ -695,6 +689,9 @@ void workspace_insert_tiling(struct sway_workspace *workspace,
 	if (con->workspace) {
 		container_detach(con);
 	}
+	if (workspace->layout == L_STACKED || workspace->layout == L_TABBED) {
+		con = container_split(con, workspace->layout);
+	}
 	list_insert(workspace->tiling, index, con);
 	con->workspace = workspace;
 	container_for_each_child(con, set_workspace, NULL);
@@ -704,28 +701,7 @@ void workspace_insert_tiling(struct sway_workspace *workspace,
 	node_set_dirty(&con->node);
 }
 
-void workspace_remove_gaps(struct sway_workspace *ws) {
-	if (ws->current_gaps.top == 0 && ws->current_gaps.right == 0 &&
-			ws->current_gaps.bottom == 0 && ws->current_gaps.left == 0) {
-		return;
-	}
-
-	ws->width += ws->current_gaps.left + ws->current_gaps.right;
-	ws->height += ws->current_gaps.top + ws->current_gaps.bottom;
-	ws->x -= ws->current_gaps.left;
-	ws->y -= ws->current_gaps.top;
-
-	ws->current_gaps.top = 0;
-	ws->current_gaps.right = 0;
-	ws->current_gaps.bottom = 0;
-	ws->current_gaps.left = 0;
-}
-
 void workspace_add_gaps(struct sway_workspace *ws) {
-	if (ws->current_gaps.top > 0 || ws->current_gaps.right > 0 ||
-			ws->current_gaps.bottom > 0 || ws->current_gaps.left > 0) {
-		return;
-	}
 	if (config->smart_gaps) {
 		struct sway_seat *seat = input_manager_get_default_seat();
 		struct sway_container *focus =
@@ -734,19 +710,38 @@ void workspace_add_gaps(struct sway_workspace *ws) {
 			focus = seat_get_focus_inactive_view(seat, &focus->node);
 		}
 		if (focus && focus->view && view_is_only_visible(focus->view)) {
+			ws->current_gaps.top = 0;
+			ws->current_gaps.right = 0;
+			ws->current_gaps.bottom = 0;
+			ws->current_gaps.left = 0;
 			return;
 		}
 	}
 
 	ws->current_gaps = ws->gaps_outer;
-	if (ws->layout == L_TABBED || ws->layout == L_STACKED) {
-		// We have to add inner gaps for this, because children of tabbed and
-		// stacked containers don't apply their own gaps - they assume the
-		// tabbed/stacked container is using gaps.
-		ws->current_gaps.top += ws->gaps_inner;
-		ws->current_gaps.right += ws->gaps_inner;
-		ws->current_gaps.bottom += ws->gaps_inner;
-		ws->current_gaps.left += ws->gaps_inner;
+	// Add inner gaps and make sure we don't turn out negative
+	ws->current_gaps.top = fmax(0, ws->current_gaps.top + ws->gaps_inner);
+	ws->current_gaps.right = fmax(0, ws->current_gaps.right + ws->gaps_inner);
+	ws->current_gaps.bottom = fmax(0, ws->current_gaps.bottom + ws->gaps_inner);
+	ws->current_gaps.left = fmax(0, ws->current_gaps.left + ws->gaps_inner);
+
+	// Now that we have the total gaps calculated we may need to clamp them in
+	// case they've made the available area too small
+	if (ws->width - ws->current_gaps.left - ws->current_gaps.right < MIN_SANE_W
+			&& ws->current_gaps.left + ws->current_gaps.right > 0) {
+		int total_gap = fmax(0, ws->width - MIN_SANE_W);
+		double left_gap_frac = ((double)ws->current_gaps.left /
+			((double)ws->current_gaps.left + (double)ws->current_gaps.right));
+		ws->current_gaps.left = left_gap_frac * total_gap;
+		ws->current_gaps.right = total_gap - ws->current_gaps.left;
+	}
+	if (ws->height - ws->current_gaps.top - ws->current_gaps.bottom < MIN_SANE_H
+			&& ws->current_gaps.top + ws->current_gaps.bottom > 0) {
+		int total_gap = fmax(0, ws->height - MIN_SANE_H);
+		double top_gap_frac = ((double) ws->current_gaps.top /
+			((double)ws->current_gaps.top + (double)ws->current_gaps.bottom));
+		ws->current_gaps.top = top_gap_frac * total_gap;
+		ws->current_gaps.bottom = total_gap - ws->current_gaps.top;
 	}
 
 	ws->x += ws->current_gaps.left;
@@ -767,6 +762,13 @@ struct sway_container *workspace_split(struct sway_workspace *workspace,
 	struct sway_container *middle = workspace_wrap_children(workspace);
 	workspace->layout = layout;
 	middle->layout = old_layout;
+
+	struct sway_seat *seat;
+	wl_list_for_each(seat, &server.input->seats, link) {
+		if (seat_get_focus(seat) == &workspace->node) {
+			seat_set_focus(seat, &middle->node);
+		}
+	}
 
 	return middle;
 }

@@ -205,12 +205,18 @@ following properties:
 |- active
 :  boolean
 :  Whether this output is active/enabled
+|- dpms
+:  boolean
+:  Whether this output is on/off (via DPMS)
 |- primary
 :  boolean
 :  For i3 compatibility, this will be false. It does not make sense in Wayland
 |- scale
 :  float
 :  The scale currently in use on the output or _-1_ for disabled outputs
+|- subpixel_hinting
+:  string
+:  The subpixel hinting current in use on the output. This can be _rgb_, _bgr_, _vrgb_, _vbgr_, or _none_
 |- transform
 :  string
 :  The transform currently in use for the output. This can be _normal_, _90_,
@@ -242,6 +248,7 @@ following properties:
 		"active": true,
 		"primary": false,
 		"scale": 1.0,
+		"subpixel_hinting": "rgb",
 		"transform": "normal",
 		"current_workspace": "1",
 		"modes": [
@@ -308,6 +315,9 @@ node and will have the following properties:
 :  string
 :  The node's layout. It can either be _splith_, _splitv_, _stacked_,
    _tabbed_, or _output_
+|- orientation
+:  string
+:  The node's orientation. It can be _vertical_, _horizontal_, or _none_
 |- percent
 :  float
 :  The percentage of the node's parent that it takes up or _null_ for the root
@@ -330,13 +340,19 @@ node and will have the following properties:
 :  boolean
 :  Whether the node or any of its descendants has the urgent hint set. Note:
    This may not exist when compiled without _xwayland_ support
+|- sticky
+:  boolean
+:  Whether the node is sticky (shows on all workspaces)
+|- marks
+:  array
+:  List of marks assigned to the node
 |- focused
 :  boolean
 :  Whether the node is currently focused by the default seat (_seat0_)
 |- focus
 :  array
 :  Array of child node IDs in the current focus order
-|- node
+|- nodes
 :  array
 :  The tiling children nodes for the node
 |- floating_nodes
@@ -346,6 +362,10 @@ node and will have the following properties:
 :  string
 :  (Only workspaces) A string representation of the layout of the workspace
    that can be used as an aid in submitting reproduction steps for bug reports
+|- fullscreen_mode
+:  integer
+:  (Only containers and views) The fullscreen mode of the node. 0 means none, 1 means 
+   full workspace, and 2 means global fullscreen
 |- app_id
 :  string
 :  (Only views) For an xdg-shell view, the name of the application, if set.
@@ -353,13 +373,19 @@ node and will have the following properties:
 |- pid
 :  integer
 :  (Only views) The PID of the application that owns the view
+|- visible
+:  boolean
+:  (Only views) Whether the node is visible
+|- shell
+:  string
+:  (Only views) The shell of the view, such as _xdg\_shell_ or _xwayland_
 |- window
 :  integer
 :  (Only xwayland views) The X11 window ID for the xwayland view
 |- window_properties
 :  object
 :  (Only xwayland views) An object containing the _title_, _class_, _instance_,
-   _window\_role_, and _transient\_for_ for the view
+   _window\_role_, _window\_type_, and _transient\_for_ for the view
 
 
 *Example Reply:*
@@ -380,6 +406,7 @@ node and will have the following properties:
 	"border": "none",
 	"current_border_width": 0,
 	"layout": "splith",
+	"orientation": "horizontal",
 	"percent": null,
 	"window_rect": {
 		"x": 0,
@@ -403,6 +430,7 @@ node and will have the following properties:
 	"urgent": false,
 	"floating_nodes": [
 	],
+	"sticky": false,
 	"type": "root",
 	"nodes": [
 		{
@@ -421,6 +449,7 @@ node and will have the following properties:
 			"border": "none",
 			"current_border_width": 0,
 			"layout": "output",
+			"orientation": "horizontal",
 			"percent": null,
 			"window_rect": {
 				"x": 0,
@@ -444,6 +473,7 @@ node and will have the following properties:
 			"urgent": false,
 			"floating_nodes": [
 			],
+			"sticky": false,
 			"type": "output",
 			"nodes": [
 				{
@@ -461,6 +491,7 @@ node and will have the following properties:
 					"border": "none",
 					"current_border_width": 0,
 					"layout": "splith",
+					"orientation": "horizontal",
 					"percent": null,
 					"window_rect": {
 						"x": 0,
@@ -484,6 +515,7 @@ node and will have the following properties:
 					"urgent": false,
 					"floating_nodes": [
 					],
+					"sticky": false,
 					"type": "workspace"
 				}
 			]
@@ -504,6 +536,7 @@ node and will have the following properties:
 			"border": "none",
 			"current_border_width": 0,
 			"layout": "output",
+			"orientation": "none",
 			"percent": 1.0,
 			"window_rect": {
 				"x": 0,
@@ -527,6 +560,7 @@ node and will have the following properties:
 			"urgent": false,
 			"floating_nodes": [
 			],
+			"sticky": false,
 			"type": "output",
 			"active": true,
 			"primary": false,
@@ -566,6 +600,7 @@ node and will have the following properties:
 					"border": "none",
 					"current_border_width": 0,
 					"layout": "splith",
+					"orientation": "horizontal",
 					"percent": null,
 					"window_rect": {
 						"x": 0,
@@ -589,6 +624,7 @@ node and will have the following properties:
 					"urgent": false,
 					"floating_nodes": [
 					],
+					"sticky": false,
 					"num": 1,
 					"output": "eDP-1",
 					"type": "workspace",
@@ -609,6 +645,7 @@ node and will have the following properties:
 							"border": "normal",
 							"current_border_width": 2,
 							"layout": "none",
+							"orientation": "none",
 							"percent": 0.5,
 							"window_rect": {
 								"x": 2,
@@ -632,9 +669,13 @@ node and will have the following properties:
 							"urgent": false,
 							"floating_nodes": [
 							],
+							"sticky": false,
 							"type": "con",
+							"fullscreen_mode": 0,
 							"pid": 23959,
 							"app_id": null,
+							"visible": true,
+							"shell": "xwayland",
 							"window_properties": {
 								"class": "URxvt",
 								"instance": "urxvt",
@@ -659,6 +700,7 @@ node and will have the following properties:
 							"border": "normal",
 							"current_border_width": 2,
 							"layout": "none",
+							"orientation": "none",
 							"percent": 0.5,
 							"window_rect": {
 								"x": 2,
@@ -682,9 +724,13 @@ node and will have the following properties:
 							"urgent": false,
 							"floating_nodes": [
 							],
+							"sticky": false,
 							"type": "con",
+							"fullscreen_mode": 0,
 							"pid": 25370,
 							"app_id": "termite",
+							"visible": true,
+							"shell": "xdg_shell",
 							"nodes": [
 							]
 						}
@@ -1033,11 +1079,77 @@ following properties:
    _tablet\_tool_, _tablet\_pad_, or _switch_
 |- xkb_active_layout_name
 :  string
-:  (Only keyboards) The active keyboard layout in use
-|- libinput_send_events
+:  (Only keyboards) The name of the active keyboard layout in use
+|- xkb_layout_names
+:  array
+:  (Only keyboards) A list a layout names configured for the keyboard
+|- xkb_active_layout_index
+:  integer
+:  (Only keyboards) The index of the active keyboard layout in use
+|- libinput
+:  object
+:  (Only libinput devices) An object describing the current device settings.
+   See below for more information
+
+The _libinput_ object describes the device configuration for libinput devices.
+Only properties that are supported for the device will be added to the object.
+In addition to the possible options listed, all string properties may also be
+_unknown_, in the case that a new option is added to libinput. See
+*sway-input*(5) for information on the meaning of the possible values. The
+following properties will be included for devices that support them:
+
+[- *PROPERTY*
+:- *DATA TYPE*
+:- *DESCRIPTION*
+|- send_events
 :  string
-:  (Only libinput devices) The send events value in use by libinput for this
-   device. It can be _enabled_, _disabled_, or _disabled\_on\_external\_mouse_
+:[ Whether events are being sent by the device. It can be _enabled_,
+   _disabled_, or _disabled\_on\_external\_mouse_
+|- tap
+:  string
+:  Whether tap to click is enabled. It can be _enabled_ or _disabled_
+|- tap_button_map
+:  string
+:  The finger to button mapping in use. It can be _lmr_ or _lrm_
+|- tap_drag
+:  string
+:  Whether tap-and-drag is enabled. It can be _enabled_ or _disabled_
+|- tap_drag_lock
+:  string
+:  Whether drag-lock is enabled. It can be _enabled_ or _disabled_
+|- accel_speed
+:  double
+:  The pointer-acceleration in use
+|- accel_profile
+:  string
+:  The acceleration profile in use. It can be _none_, _flat_, or _adaptive_
+|- natural_scroll
+:  string
+:  Whether natural scrolling is enabled. It can be _enabled_ or _disabled_
+|- left_handed
+:  string
+:  Whether left-handed mode is enabled. It can be _enabled_ or _disabled_
+|- click_method
+:  string
+:  The click method in use. It can be _none_, _button_areas_, or _clickfinger_
+|- middle_emulation
+:  string
+:  Whether middle emulation is enabled. It can be _enabled_ or _disabled_
+|- scroll_method
+:  string
+:  The scroll method in use. It can be _none_, _two_finger_, _edge_, or
+   _on_button_down_
+|- scroll_button
+:  int
+:  The scroll button to use when _scroll_method_ is _on_button_down_. This
+   will be given as an input event code
+|- dwt
+:  string
+:  Whether disable-while-typing is enabled. It can be _enabled_ or _disabled_
+|- calibration_matrix
+:  array
+:  An array of 6 floats representing the calibration matrix for absolute
+   devices such as touchscreens
 
 
 *Example Reply:*
@@ -1050,7 +1162,9 @@ following properties:
 		"product": 1,
 		"type": "keyboard",
 		"xkb_active_layout_name": "English (US)",
-		"libinput_send_events": "enabled"
+		"libinput": {
+			"send_events": "enabled"
+		}
 	},
 	{
 		"identifier": "1267:5:Elan_Touchpad",
@@ -1058,7 +1172,21 @@ following properties:
 		"vendor": 1267,
 		"product": 5,
 		"type": "pointer",
-		"libinput_send_events": "enabled"
+		"libinput": {
+			"send_events": "enabled",
+			"tap": "enabled",
+			"tap_button_map": "lmr",
+			"tap_drag": "enabled",
+			"tap_drag_lock": "disabled",
+			"accel_speed": 0.0,
+			"accel_profile": "none",
+			"natural_scroll", "disabled",
+			"left_handed": "disabled",
+			"click_method": "button_areas",
+			"middle_emulation": "disabled",
+			"scroll_method": "edge",
+			"dwt": "enabled"
+		}
 	},
 	{
 		"identifier": "3034:22494:USB2.0_VGA_UVC_WebCam:_USB2.0_V",
@@ -1067,7 +1195,9 @@ following properties:
 		"product": 22494,
 		"type": "keyboard",
 		"xkb_active_layout_name": "English (US)",
-		"libinput_send_events": "enabled"
+		"libinput": {
+			"send_events": "enabled"
+		}
 	},
 	{
 		"identifier": "0:3:Sleep_Button",
@@ -1076,7 +1206,9 @@ following properties:
 		"product": 3,
 		"type": "keyboard",
 		"xkb_active_layout_name": "English (US)",
-		"libinput_send_events": "enabled"
+		"libinput": {
+			"send_events": "enabled"
+		}
 	},
 	{
 		"identifier": "0:5:Lid_Switch",
@@ -1084,7 +1216,10 @@ following properties:
 		"vendor": 0,
 		"product": 5,
 		"type": "switch",
-		"libinput_send_events": "enabled"
+		"libinput": {
+			"send_events": "enabled"
+		}
+	},
 	{
 		"identifier": "0:6:Video_Bus",
 		"name": "Video Bus",
@@ -1092,7 +1227,9 @@ following properties:
 		"product": 6,
 		"type": "keyboard",
 		"xkb_active_layout_name": "English (US)",
-		"libinput_send_events": "enabled"
+		"libinput": {
+			"send_events": "enabled"
+		}
 	},
 	{
 		"identifier": "0:1:Power_Button",
@@ -1101,7 +1238,9 @@ following properties:
 		"product": 1,
 		"type": "keyboard",
 		"xkb_active_layout_name": "English (US)",
-		"libinput_send_events": "enabled"
+		"libinput": {
+			"send_events": "enabled"
+		}
 	}
 ]
 ```
@@ -1150,7 +1289,9 @@ one seat. Each object has the following properties:
 				"product": 1,
 				"type": "keyboard",
 				"xkb_active_layout_name": "English (US)",
-				"libinput_send_events": "enabled"
+				"libinput": {
+					"send_events": "enabled"
+				}
 			},
 			{
 				"identifier": "1267:5:Elan_Touchpad",
@@ -1158,7 +1299,21 @@ one seat. Each object has the following properties:
 				"vendor": 1267,
 				"product": 5,
 				"type": "pointer",
-				"libinput_send_events": "enabled"
+				"libinput": {
+					"send_events": "enabled",
+					"tap": "enabled",
+					"tap_button_map": "lmr",
+					"tap_drag": "enabled",
+					"tap_drag_lock": "disabled",
+					"accel_speed": 0.0,
+					"accel_profile": "none",
+					"natural_scroll", "disabled",
+					"left_handed": "disabled",
+					"click_method": "button_areas",
+					"middle_emulation": "disabled",
+					"scroll_method": "edge",
+					"dwt": "enabled"
+				}
 			},
 			{
 				"identifier": "3034:22494:USB2.0_VGA_UVC_WebCam:_USB2.0_V",
@@ -1167,7 +1322,9 @@ one seat. Each object has the following properties:
 				"product": 22494,
 				"type": "keyboard",
 				"xkb_active_layout_name": "English (US)",
-				"libinput_send_events": "enabled"
+				"libinput": {
+					"send_events": "enabled"
+				}
 			},
 			{
 				"identifier": "0:3:Sleep_Button",
@@ -1176,7 +1333,9 @@ one seat. Each object has the following properties:
 				"product": 3,
 				"type": "keyboard",
 				"xkb_active_layout_name": "English (US)",
-				"libinput_send_events": "enabled"
+				"libinput": {
+					"send_events": "enabled"
+				}
 			},
 			{
 				"identifier": "0:5:Lid_Switch",
@@ -1184,7 +1343,10 @@ one seat. Each object has the following properties:
 				"vendor": 0,
 				"product": 5,
 				"type": "switch",
-				"libinput_send_events": "enabled"
+				"libinput": {
+					"send_events": "enabled"
+				}
+			},
 			{
 				"identifier": "0:6:Video_Bus",
 				"name": "Video Bus",
@@ -1192,7 +1354,9 @@ one seat. Each object has the following properties:
 				"product": 6,
 				"type": "keyboard",
 				"xkb_active_layout_name": "English (US)",
-				"libinput_send_events": "enabled"
+				"libinput": {
+					"send_events": "enabled"
+				}
 			},
 			{
 				"identifier": "0:1:Power_Button",
@@ -1201,7 +1365,9 @@ one seat. Each object has the following properties:
 				"product": 1,
 				"type": "keyboard",
 				"xkb_active_layout_name": "English (US)",
-				"libinput_send_events": "enabled"
+				"libinput": {
+					"send_events": "enabled"
+				}
 			}
 		]
 	}
@@ -1242,8 +1408,11 @@ available:
 :  tick
 :  Sent when an ipc client sends a _SEND\_TICK_ message
 |- 0x80000014
-:  bar_status_update
+:  bar_state_update
 :  Send when the visibility of a bar should change due to a modifier
+|- 0x80000015
+:  input
+:  Sent when something related to input devices changes
 
 
 ## 0x80000000. WORKSPACE
@@ -1551,7 +1720,7 @@ event is a single object with the following properties:
 }
 ```
 
-## 0x80000014. BAR_STATUS_UPDATE
+## 0x80000014. BAR_STATE_UPDATE
 
 Sent when the visibility of a bar changes due to a modifier being pressed. The
 event is a single object with the following properties:
@@ -1572,6 +1741,58 @@ event is a single object with the following properties:
 {
 	"id": "bar-0",
 	"visible_by_modifier": true
+}
+```
+
+## 0x80000015. INPUT
+
+Sent when something related to the input devices changes. The event is a single
+object with the following properties:
+
+[- *PROPERTY*
+:- *DATA TYPE*
+:- *DESCRIPTION*
+|- change
+:  string
+:[ What has changed
+|- input
+:  object
+:  An object representing the input that is identical the ones GET_INPUTS gives
+
+The following change types are currently available:
+[- *TYPE*
+:- *DESCRIPTION*
+|- added
+:[ The input device became available
+|- removed
+:  The input device is no longer available
+|- xkb_keymap
+:  (Keyboards only) The keymap for the keyboard has changed
+|- xkb_layout
+:  (Keyboards only) The effective layout in the keymap has changed
+|- libinput_config
+:  (libinput device only) A libinput config option for the device changed
+
+*Example Event:*
+```
+{
+	"change": "xkb_layout",
+	"input": {
+		"identifier": "1:1:AT_Translated_Set_2_keyboard",
+		"name": "AT Translated Set 2 keyboard",
+		"vendor": 1,
+		"product": 1,
+		"type": "keyboard",
+		"xkb_layout_names": [
+			"English (US)",
+			"English (Dvorak)"
+		],
+		"xkb_active_layout_index": 1,
+		"xkb_active_layout_name": "English (Dvorak)",
+		"libinput": {
+			"send_events": "enabled"
+		}
+	}
 }
 ```
 

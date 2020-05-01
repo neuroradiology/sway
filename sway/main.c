@@ -5,7 +5,6 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -15,9 +14,9 @@
 #include <wlr/util/log.h>
 #include "sway/commands.h"
 #include "sway/config.h"
-#include "sway/debug.h"
 #include "sway/server.h"
 #include "sway/swaynag.h"
+#include "sway/desktop/transaction.h"
 #include "sway/tree/root.h"
 #include "sway/ipc-server.h"
 #include "ipc-client.h"
@@ -28,6 +27,7 @@
 static bool terminate_request = false;
 static int exit_value = 0;
 struct sway_server server = {0};
+struct sway_debug debug = {0};
 
 void sway_terminate(int exit_code) {
 	if (!server.wl_display) {
@@ -91,7 +91,7 @@ void detect_proprietary(int allow_unsupported_gpu) {
 	char *line = NULL;
 	size_t line_size = 0;
 	while (getline(&line, &line_size, f) != -1) {
-		if (strstr(line, "nvidia")) {
+		if (strncmp(line, "nvidia ", 7) == 0) {
 			if (allow_unsupported_gpu) {
 				sway_log(SWAY_ERROR,
 						"!!! Proprietary Nvidia drivers are in use !!!");
@@ -186,12 +186,17 @@ static void log_kernel(void) {
 
 static bool drop_permissions(void) {
 	if (getuid() != geteuid() || getgid() != getegid()) {
-		if (setuid(getuid()) != 0 || setgid(getgid()) != 0) {
-			sway_log(SWAY_ERROR, "Unable to drop root, refusing to start");
+		// Set the gid and uid in the correct order.
+		if (setgid(getgid()) != 0) {
+			sway_log(SWAY_ERROR, "Unable to drop root group, refusing to start");
+			return false;
+		}
+		if (setuid(getuid()) != 0) {
+			sway_log(SWAY_ERROR, "Unable to drop root user, refusing to start");
 			return false;
 		}
 	}
-	if (setuid(0) != -1) {
+	if (setgid(0) != -1 || setuid(0) != -1) {
 		sway_log(SWAY_ERROR, "Unable to drop root (we shouldn't be able to "
 			"restore it after setuid), refusing to start");
 		return false;
@@ -206,14 +211,14 @@ void enable_debug_flag(const char *flag) {
 		debug.damage = DAMAGE_RERENDER;
 	} else if (strcmp(flag, "noatomic") == 0) {
 		debug.noatomic = true;
-	} else if (strcmp(flag, "render-tree") == 0) {
-		debug.render_tree = true;
 	} else if (strcmp(flag, "txn-wait") == 0) {
 		debug.txn_wait = true;
 	} else if (strcmp(flag, "txn-timings") == 0) {
 		debug.txn_timings = true;
 	} else if (strncmp(flag, "txn-timeout=", 12) == 0) {
 		server.txn_timeout_ms = atoi(&flag[12]);
+	} else {
+		sway_log(SWAY_ERROR, "Unknown debug flag: %s", flag);
 	}
 }
 
@@ -260,6 +265,7 @@ int main(int argc, char **argv) {
 			exit(EXIT_SUCCESS);
 			break;
 		case 'c': // config
+			free(config_path);
 			config_path = strdup(optarg);
 			break;
 		case 'C': // validate
@@ -309,7 +315,7 @@ int main(int argc, char **argv) {
 	if (debug) {
 		sway_log_init(SWAY_DEBUG, sway_terminate);
 		wlr_log_init(WLR_DEBUG, NULL);
-	} else if (verbose || validate) {
+	} else if (verbose) {
 		sway_log_init(SWAY_INFO, sway_terminate);
 		wlr_log_init(WLR_INFO, NULL);
 	} else {
@@ -393,8 +399,10 @@ int main(int argc, char **argv) {
 	config->active = true;
 	load_swaybars();
 	run_deferred_commands();
+	run_deferred_bindings();
+	transaction_commit_dirty();
 
-	if (config->swaynag_config_errors.pid > 0) {
+	if (config->swaynag_config_errors.client != NULL) {
 		swaynag_show(&config->swaynag_config_errors);
 	}
 

@@ -17,6 +17,7 @@
 #include <wlr/types/wlr_output.h>
 #include "sway/input/input-manager.h"
 #include "sway/input/seat.h"
+#include "sway/input/switch.h"
 #include "sway/commands.h"
 #include "sway/config.h"
 #include "sway/criteria.h"
@@ -30,8 +31,27 @@
 #include "stringop.h"
 #include "list.h"
 #include "log.h"
+#include "util.h"
 
 struct sway_config *config = NULL;
+
+static struct xkb_state *keysym_translation_state_create(
+		struct xkb_rule_names rules) {
+	struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+	struct xkb_keymap *xkb_keymap = xkb_keymap_new_from_names(
+		context,
+		&rules,
+		XKB_KEYMAP_COMPILE_NO_FLAGS);
+
+	xkb_context_unref(context);
+	return xkb_state_new(xkb_keymap);
+}
+
+static void keysym_translation_state_destroy(
+		struct xkb_state *state) {
+	xkb_keymap_unref(xkb_state_get_keymap(state));
+	xkb_state_unref(state);
+}
 
 static void free_mode(struct sway_mode *mode) {
 	if (!mode) {
@@ -55,6 +75,12 @@ static void free_mode(struct sway_mode *mode) {
 			free_sway_binding(mode->mouse_bindings->items[i]);
 		}
 		list_free(mode->mouse_bindings);
+	}
+	if (mode->switch_bindings) {
+		for (int i = 0; i < mode->switch_bindings->length; i++) {
+			free_switch_binding(mode->switch_bindings->items[i]);
+		}
+		list_free(mode->switch_bindings);
 	}
 	free(mode);
 }
@@ -98,11 +124,20 @@ void free_config(struct sway_config *config) {
 		}
 		list_free(config->output_configs);
 	}
+	if (config->swaybg_client != NULL) {
+		wl_client_destroy(config->swaybg_client);
+	}
 	if (config->input_configs) {
 		for (int i = 0; i < config->input_configs->length; i++) {
 			free_input_config(config->input_configs->items[i]);
 		}
 		list_free(config->input_configs);
+	}
+	if (config->input_type_configs) {
+		for (int i = 0; i < config->input_type_configs->length; i++) {
+			free_input_config(config->input_type_configs->items[i]);
+		}
+		list_free(config->input_type_configs);
 	}
 	if (config->seat_configs) {
 		for (int i = 0; i < config->seat_configs->length; i++) {
@@ -131,6 +166,7 @@ void free_config(struct sway_config *config) {
 	free(config->swaynag_command);
 	free((char *)config->current_config_path);
 	free((char *)config->current_config);
+	keysym_translation_state_destroy(config->keysym_translation_state);
 	free(config);
 }
 
@@ -157,24 +193,15 @@ static void destroy_removed_seats(struct sway_config *old_config,
 	}
 }
 
-static void set_color(float dest[static 4], uint32_t color) {
-	dest[0] = ((color >> 16) & 0xff) / 255.0;
-	dest[1] = ((color >> 8) & 0xff) / 255.0;
-	dest[2] = (color & 0xff) / 255.0;
-	dest[3] = 1.0;
-}
-
 static void config_defaults(struct sway_config *config) {
 	if (!(config->swaynag_command = strdup("swaynag"))) goto cleanup;
-	config->swaynag_config_errors = (struct swaynag_instance){
-		.args = "--type error "
+	config->swaynag_config_errors = (struct swaynag_instance){0};
+	config->swaynag_config_errors.args = "--type error "
 			"--message 'There are errors in your config file' "
 			"--detailed-message "
-			"--button 'Exit sway' 'swaymsg exit' "
-			"--button 'Reload sway' 'swaymsg reload'",
-		.pid = -1,
-		.detailed = true,
-	};
+			"--button-no-terminal 'Exit sway' 'swaymsg exit' "
+			"--button-no-terminal 'Reload sway' 'swaymsg reload'";
+	config->swaynag_config_errors.detailed = true;
 
 	if (!(config->symbols = create_list())) goto cleanup;
 	if (!(config->modes = create_list())) goto cleanup;
@@ -182,9 +209,11 @@ static void config_defaults(struct sway_config *config) {
 	if (!(config->workspace_configs = create_list())) goto cleanup;
 	if (!(config->criteria = create_list())) goto cleanup;
 	if (!(config->no_focus = create_list())) goto cleanup;
-	if (!(config->input_configs = create_list())) goto cleanup;
 	if (!(config->seat_configs = create_list())) goto cleanup;
 	if (!(config->output_configs = create_list())) goto cleanup;
+
+	if (!(config->input_type_configs = create_list())) goto cleanup;
+	if (!(config->input_configs = create_list())) goto cleanup;
 
 	if (!(config->cmd_queue = create_list())) goto cleanup;
 
@@ -195,6 +224,7 @@ static void config_defaults(struct sway_config *config) {
 	if (!(config->current_mode->keysym_bindings = create_list())) goto cleanup;
 	if (!(config->current_mode->keycode_bindings = create_list())) goto cleanup;
 	if (!(config->current_mode->mouse_bindings = create_list())) goto cleanup;
+	if (!(config->current_mode->switch_bindings = create_list())) goto cleanup;
 	list_add(config->modes, config->current_mode);
 
 	config->floating_mod = 0;
@@ -211,8 +241,9 @@ static void config_defaults(struct sway_config *config) {
 	if (!(config->font = strdup("monospace 10"))) goto cleanup;
 	config->font_height = 17; // height of monospace 10
 	config->urgent_timeout = 500;
+	config->focus_on_window_activation = FOWA_URGENT;
 	config->popup_during_fullscreen = POPUP_SMART;
-	config->xwayland = true;
+	config->xwayland = XWAYLAND_MODE_LAZY;
 
 	config->titlebar_border_thickness = 1;
 	config->titlebar_h_padding = 5;
@@ -260,46 +291,51 @@ static void config_defaults(struct sway_config *config) {
 	config->border_thickness = 2;
 	config->floating_border_thickness = 2;
 	config->hide_edge_borders = E_NONE;
-	config->saved_edge_borders = E_NONE;
+	config->hide_edge_borders_smart = ESMART_OFF;
 	config->hide_lone_tab = false;
 
 	// border colors
-	set_color(config->border_colors.focused.border, 0x4C7899);
-	set_color(config->border_colors.focused.background, 0x285577);
-	set_color(config->border_colors.focused.text, 0xFFFFFFFF);
-	set_color(config->border_colors.focused.indicator, 0x2E9EF4);
-	set_color(config->border_colors.focused.child_border, 0x285577);
+	color_to_rgba(config->border_colors.focused.border, 0x4C7899FF);
+	color_to_rgba(config->border_colors.focused.background, 0x285577FF);
+	color_to_rgba(config->border_colors.focused.text, 0xFFFFFFFF);
+	color_to_rgba(config->border_colors.focused.indicator, 0x2E9EF4FF);
+	color_to_rgba(config->border_colors.focused.child_border, 0x285577FF);
 
-	set_color(config->border_colors.focused_inactive.border, 0x333333);
-	set_color(config->border_colors.focused_inactive.background, 0x5F676A);
-	set_color(config->border_colors.focused_inactive.text, 0xFFFFFFFF);
-	set_color(config->border_colors.focused_inactive.indicator, 0x484E50);
-	set_color(config->border_colors.focused_inactive.child_border, 0x5F676A);
+	color_to_rgba(config->border_colors.focused_inactive.border, 0x333333FF);
+	color_to_rgba(config->border_colors.focused_inactive.background, 0x5F676AFF);
+	color_to_rgba(config->border_colors.focused_inactive.text, 0xFFFFFFFF);
+	color_to_rgba(config->border_colors.focused_inactive.indicator, 0x484E50FF);
+	color_to_rgba(config->border_colors.focused_inactive.child_border, 0x5F676AFF);
 
-	set_color(config->border_colors.unfocused.border, 0x333333);
-	set_color(config->border_colors.unfocused.background, 0x222222);
-	set_color(config->border_colors.unfocused.text, 0x88888888);
-	set_color(config->border_colors.unfocused.indicator, 0x292D2E);
-	set_color(config->border_colors.unfocused.child_border, 0x222222);
+	color_to_rgba(config->border_colors.unfocused.border, 0x333333FF);
+	color_to_rgba(config->border_colors.unfocused.background, 0x222222FF);
+	color_to_rgba(config->border_colors.unfocused.text, 0x888888FF);
+	color_to_rgba(config->border_colors.unfocused.indicator, 0x292D2EFF);
+	color_to_rgba(config->border_colors.unfocused.child_border, 0x222222FF);
 
-	set_color(config->border_colors.urgent.border, 0x2F343A);
-	set_color(config->border_colors.urgent.background, 0x900000);
-	set_color(config->border_colors.urgent.text, 0xFFFFFFFF);
-	set_color(config->border_colors.urgent.indicator, 0x900000);
-	set_color(config->border_colors.urgent.child_border, 0x900000);
+	color_to_rgba(config->border_colors.urgent.border, 0x2F343AFF);
+	color_to_rgba(config->border_colors.urgent.background, 0x900000FF);
+	color_to_rgba(config->border_colors.urgent.text, 0xFFFFFFFF);
+	color_to_rgba(config->border_colors.urgent.indicator, 0x900000FF);
+	color_to_rgba(config->border_colors.urgent.child_border, 0x900000FF);
 
-	set_color(config->border_colors.placeholder.border, 0x000000);
-	set_color(config->border_colors.placeholder.background, 0x0C0C0C);
-	set_color(config->border_colors.placeholder.text, 0xFFFFFFFF);
-	set_color(config->border_colors.placeholder.indicator, 0x000000);
-	set_color(config->border_colors.placeholder.child_border, 0x0C0C0C);
+	color_to_rgba(config->border_colors.placeholder.border, 0x000000FF);
+	color_to_rgba(config->border_colors.placeholder.background, 0x0C0C0CFF);
+	color_to_rgba(config->border_colors.placeholder.text, 0xFFFFFFFF);
+	color_to_rgba(config->border_colors.placeholder.indicator, 0x000000FF);
+	color_to_rgba(config->border_colors.placeholder.child_border, 0x0C0C0CFF);
 
-	set_color(config->border_colors.background, 0xFFFFFF);
+	color_to_rgba(config->border_colors.background, 0xFFFFFFFF);
 
 	// Security
 	if (!(config->command_policies = create_list())) goto cleanup;
 	if (!(config->feature_policies = create_list())) goto cleanup;
 	if (!(config->ipc_policies = create_list())) goto cleanup;
+
+	// The keysym to keycode translation
+	struct xkb_rule_names rules = {0};
+	config->keysym_translation_state =
+		keysym_translation_state_create(rules);
 
 	return;
 cleanup:
@@ -369,7 +405,7 @@ static bool load_config(const char *path, struct sway_config *config,
 		sway_log(SWAY_ERROR, "Error(s) loading config!");
 	}
 
-	return true;
+	return config->active || !config->validating || config_load_success;
 }
 
 bool load_main_config(const char *file, bool is_active, bool validating) {
@@ -401,12 +437,22 @@ bool load_main_config(const char *file, bool is_active, bool validating) {
 		config->reloading = true;
 		config->active = true;
 
-		swaynag_kill(&old_config->swaynag_config_errors);
-		memcpy(&config->swaynag_config_errors,
-				&old_config->swaynag_config_errors,
-				sizeof(struct swaynag_instance));
+		// xwayland can only be enabled/disabled at launch
+		sway_log(SWAY_DEBUG, "xwayland will remain %s",
+				old_config->xwayland ? "enabled" : "disabled");
+		config->xwayland = old_config->xwayland;
 
-		input_manager_reset_all_inputs();
+		if (!config->validating) {
+			if (old_config->swaybg_client != NULL) {
+				wl_client_destroy(old_config->swaybg_client);
+			}
+
+			if (old_config->swaynag_config_errors.client != NULL) {
+				wl_client_destroy(old_config->swaynag_config_errors.client);
+			}
+
+			input_manager_reset_all_inputs();
+		}
 	}
 
 	config->current_config_path = path;
@@ -471,17 +517,29 @@ bool load_main_config(const char *file, bool is_active, bool validating) {
 		return success;
 	}
 
-	if (is_active) {
-		reset_outputs();
+	if (is_active && !validating) {
+		input_manager_verify_fallback_seat();
 
-		config->reloading = false;
-		if (config->swaynag_config_errors.pid > 0) {
-			swaynag_show(&config->swaynag_config_errors);
+		for (int i = 0; i < config->input_configs->length; i++) {
+			input_manager_apply_input_config(config->input_configs->items[i]);
 		}
 
-		input_manager_verify_fallback_seat();
+		for (int i = 0; i < config->input_type_configs->length; i++) {
+			input_manager_apply_input_config(
+					config->input_type_configs->items[i]);
+		}
+
 		for (int i = 0; i < config->seat_configs->length; i++) {
 			input_manager_apply_seat_config(config->seat_configs->items[i]);
+		}
+		sway_switch_retrigger_bindings_for_all();
+
+		reset_outputs();
+		spawn_swaybg();
+
+		config->reloading = false;
+		if (config->swaynag_config_errors.client != NULL) {
+			swaynag_show(&config->swaynag_config_errors);
 		}
 	}
 
@@ -600,7 +658,23 @@ void run_deferred_commands(void) {
 		list_free(res_list);
 		free(line);
 	}
-	transaction_commit_dirty();
+}
+
+void run_deferred_bindings(void) {
+	struct sway_seat *seat;
+	wl_list_for_each(seat, &(server.input->seats), link) {
+		if (!seat->deferred_bindings->length) {
+			continue;
+		}
+		sway_log(SWAY_DEBUG, "Running deferred bindings for seat %s",
+				seat->wlr_seat->name);
+		while (seat->deferred_bindings->length) {
+			struct sway_binding *binding = seat->deferred_bindings->items[0];
+			seat_execute_command(seat, binding);
+			list_del(seat->deferred_bindings, 0);
+			free_sway_binding(binding);
+		}
+	}
 }
 
 // get line, with backslash continuation
@@ -610,7 +684,7 @@ static ssize_t getline_with_cont(char **lineptr, size_t *line_size, FILE *file,
 	size_t next_line_size = 0;
 	ssize_t nread = getline(lineptr, line_size, file);
 	*nlines = nread == -1 ? 0 : 1;
-	while (nread >= 2 && strcmp(&(*lineptr)[nread - 2], "\\\n") == 0) {
+	while (nread >= 2 && strcmp(&(*lineptr)[nread - 2], "\\\n") == 0 && (*lineptr)[0] != '#') {
 		ssize_t next_nread = getline(&next_line, &next_line_size, file);
 		if (next_nread == -1) {
 			break;
@@ -620,8 +694,10 @@ static ssize_t getline_with_cont(char **lineptr, size_t *line_size, FILE *file,
 		nread += next_nread - 2;
 		if ((ssize_t) *line_size < nread + 1) {
 			*line_size = nread + 1;
+			char *old_ptr = *lineptr;
 			*lineptr = realloc(*lineptr, *line_size);
 			if (!*lineptr) {
+				free(old_ptr);
 				nread = -1;
 				break;
 			}
@@ -920,4 +996,54 @@ void config_update_font_height(bool recalculate) {
 	if (config->font_height != prev_max_height) {
 		arrange_root();
 	}
+}
+
+static void translate_binding_list(list_t *bindings, list_t *bindsyms,
+		list_t *bindcodes) {
+	for (int i = 0; i < bindings->length; ++i) {
+		struct sway_binding *binding = bindings->items[i];
+		translate_binding(binding);
+
+		switch (binding->type) {
+		case BINDING_KEYSYM:
+			binding_add_translated(binding, bindsyms);
+			break;
+		case BINDING_KEYCODE:
+			binding_add_translated(binding, bindcodes);
+			break;
+		default:
+			sway_assert(false, "unexpected translated binding type: %d",
+					binding->type);
+			break;
+		}
+
+	}
+}
+
+void translate_keysyms(struct input_config *input_config) {
+	keysym_translation_state_destroy(config->keysym_translation_state);
+
+	struct xkb_rule_names rules = {0};
+	input_config_fill_rule_names(input_config, &rules);
+	config->keysym_translation_state =
+		keysym_translation_state_create(rules);
+
+	for (int i = 0; i < config->modes->length; ++i) {
+		struct sway_mode *mode = config->modes->items[i];
+
+		list_t *bindsyms = create_list();
+		list_t *bindcodes = create_list();
+
+		translate_binding_list(mode->keysym_bindings, bindsyms, bindcodes);
+		translate_binding_list(mode->keycode_bindings, bindsyms, bindcodes);
+
+		list_free(mode->keysym_bindings);
+		list_free(mode->keycode_bindings);
+
+		mode->keysym_bindings = bindsyms;
+		mode->keycode_bindings = bindcodes;
+	}
+
+	sway_log(SWAY_DEBUG, "Translated keysyms using config for device '%s'",
+			input_config->identifier);
 }

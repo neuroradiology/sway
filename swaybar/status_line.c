@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include "log.h"
 #include "loop.h"
@@ -81,6 +83,13 @@ bool status_handle_readable(struct status_line *status) {
 					json_object_put(header);
 					return true;
 				}
+			}
+
+			json_object *float_event_coords;
+			if (json_object_object_get_ex(header, "float_event_coords", &float_event_coords)
+					&& json_object_get_boolean(float_event_coords)) {
+				sway_log(SWAY_DEBUG, "Enabling floating-point coordinates.");
+				status->float_event_coords = true;
 			}
 
 			json_object *signal;
@@ -174,6 +183,7 @@ struct status_line *status_line_init(char *cmd) {
 void status_line_free(struct status_line *status) {
 	status_line_close_fds(status);
 	kill(status->pid, SIGTERM);
+	waitpid(status->pid, NULL, 0);
 	if (status->protocol == PROTOCOL_I3BAR) {
 		struct i3bar_block *block, *tmp;
 		wl_list_for_each_safe(block, tmp, &status->blocks, link) {

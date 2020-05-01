@@ -2,12 +2,14 @@
 #include <strings.h>
 #include "sway/commands.h"
 #include "sway/input/input-manager.h"
+#include "sway/input/keyboard.h"
 #include "log.h"
 #include "stringop.h"
 
 // must be in order for the bsearch
 static struct cmd_handler input_handlers[] = {
 	{ "accel_profile", input_cmd_accel_profile },
+	{ "calibration_matrix", input_cmd_calibration_matrix },
 	{ "click_method", input_cmd_click_method },
 	{ "drag", input_cmd_drag },
 	{ "drag_lock", input_cmd_drag_lock },
@@ -16,6 +18,7 @@ static struct cmd_handler input_handlers[] = {
 	{ "left_handed", input_cmd_left_handed },
 	{ "map_from_region", input_cmd_map_from_region },
 	{ "map_to_output", input_cmd_map_to_output },
+	{ "map_to_region", input_cmd_map_to_region },
 	{ "middle_emulation", input_cmd_middle_emulation },
 	{ "natural_scroll", input_cmd_natural_scroll },
 	{ "pointer_accel", input_cmd_pointer_accel },
@@ -26,10 +29,12 @@ static struct cmd_handler input_handlers[] = {
 	{ "scroll_method", input_cmd_scroll_method },
 	{ "tap", input_cmd_tap },
 	{ "tap_button_map", input_cmd_tap_button_map },
+	{ "xkb_file", input_cmd_xkb_file },
 	{ "xkb_layout", input_cmd_xkb_layout },
 	{ "xkb_model", input_cmd_xkb_model },
 	{ "xkb_options", input_cmd_xkb_options },
 	{ "xkb_rules", input_cmd_xkb_rules },
+	{ "xkb_switch_layout", input_cmd_xkb_switch_layout },
 	{ "xkb_variant", input_cmd_xkb_variant },
 };
 
@@ -68,11 +73,25 @@ struct cmd_results *cmd_input(int argc, char **argv) {
 			input_handlers, sizeof(input_handlers));
 	}
 
-	if (!res || res->status == CMD_SUCCESS) {
+	if ((!res || res->status == CMD_SUCCESS) &&
+			strcmp(argv[1], "xkb_switch_layout") != 0) {
+		char *error = NULL;
 		struct input_config *ic =
-			store_input_config(config->handler_context.input_config);
+			store_input_config(config->handler_context.input_config, &error);
+		if (!ic) {
+			free_input_config(config->handler_context.input_config);
+			if (res) {
+				free_cmd_results(res);
+			}
+			res = cmd_results_new(CMD_FAILURE, "Failed to compile keymap: %s",
+					error ? error : "(details unavailable)");
+			free(error);
+			return res;
+		}
 
-		input_manager_apply_input_config(ic);
+		if (!config->reloading) {
+			input_manager_apply_input_config(ic);
+		}
 	} else {
 		free_input_config(config->handler_context.input_config);
 	}

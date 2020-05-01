@@ -47,7 +47,8 @@ struct cmd_results *checkarg(int argc, const char *name,
 		enum expected_args type, int val);
 
 struct cmd_handler *find_handler(char *line, struct cmd_handler *cmd_handlers,
-		int handlers_size);
+		size_t handlers_size);
+
 /**
  * Parse and executes a command.
  *
@@ -87,8 +88,6 @@ void free_cmd_results(struct cmd_results *results);
  */
 char *cmd_results_to_json(list_t *res_list);
 
-struct cmd_results *add_color(char *buffer, const char *color);
-
 /**
  * TODO: Move this function and its dependent functions to container.c.
  */
@@ -101,6 +100,7 @@ struct sway_container *container_find_resize_parent(struct sway_container *con,
 sway_cmd cmd_assign;
 sway_cmd cmd_bar;
 sway_cmd cmd_bindcode;
+sway_cmd cmd_bindswitch;
 sway_cmd cmd_bindsym;
 sway_cmd cmd_border;
 sway_cmd cmd_client_noop;
@@ -135,6 +135,7 @@ sway_cmd cmd_fullscreen;
 sway_cmd cmd_gaps;
 sway_cmd cmd_hide_edge_borders;
 sway_cmd cmd_include;
+sway_cmd cmd_inhibit_idle;
 sway_cmd cmd_input;
 sway_cmd cmd_seat;
 sway_cmd cmd_ipc;
@@ -142,9 +143,12 @@ sway_cmd cmd_kill;
 sway_cmd cmd_layout;
 sway_cmd cmd_log_colors;
 sway_cmd cmd_mark;
+sway_cmd cmd_max_render_time;
 sway_cmd cmd_mode;
 sway_cmd cmd_mouse_warping;
 sway_cmd cmd_move;
+sway_cmd cmd_new_float;
+sway_cmd cmd_new_window;
 sway_cmd cmd_nop;
 sway_cmd cmd_opacity;
 sway_cmd cmd_new_float;
@@ -177,6 +181,9 @@ sway_cmd cmd_title_align;
 sway_cmd cmd_title_format;
 sway_cmd cmd_titlebar_border_thickness;
 sway_cmd cmd_titlebar_padding;
+sway_cmd cmd_unbindcode;
+sway_cmd cmd_unbindswitch;
+sway_cmd cmd_unbindsym;
 sway_cmd cmd_unmark;
 sway_cmd cmd_urgent;
 sway_cmd cmd_workspace;
@@ -210,6 +217,8 @@ sway_cmd bar_cmd_tray_bindcode;
 sway_cmd bar_cmd_tray_bindsym;
 sway_cmd bar_cmd_tray_output;
 sway_cmd bar_cmd_tray_padding;
+sway_cmd bar_cmd_unbindcode;
+sway_cmd bar_cmd_unbindsym;
 sway_cmd bar_cmd_wrap_scroll;
 sway_cmd bar_cmd_workspace_buttons;
 
@@ -227,6 +236,7 @@ sway_cmd bar_colors_cmd_urgent_workspace;
 
 sway_cmd input_cmd_seat;
 sway_cmd input_cmd_accel_profile;
+sway_cmd input_cmd_calibration_matrix;
 sway_cmd input_cmd_click_method;
 sway_cmd input_cmd_drag;
 sway_cmd input_cmd_drag_lock;
@@ -235,6 +245,7 @@ sway_cmd input_cmd_events;
 sway_cmd input_cmd_left_handed;
 sway_cmd input_cmd_map_from_region;
 sway_cmd input_cmd_map_to_output;
+sway_cmd input_cmd_map_to_region;
 sway_cmd input_cmd_middle_emulation;
 sway_cmd input_cmd_natural_scroll;
 sway_cmd input_cmd_pointer_accel;
@@ -246,27 +257,39 @@ sway_cmd input_cmd_scroll_method;
 sway_cmd input_cmd_tap;
 sway_cmd input_cmd_tap_button_map;
 sway_cmd input_cmd_xkb_capslock;
+sway_cmd input_cmd_xkb_file;
 sway_cmd input_cmd_xkb_layout;
 sway_cmd input_cmd_xkb_model;
 sway_cmd input_cmd_xkb_numlock;
 sway_cmd input_cmd_xkb_options;
 sway_cmd input_cmd_xkb_rules;
+sway_cmd input_cmd_xkb_switch_layout;
 sway_cmd input_cmd_xkb_variant;
 
+sway_cmd output_cmd_adaptive_sync;
 sway_cmd output_cmd_background;
 sway_cmd output_cmd_disable;
 sway_cmd output_cmd_dpms;
 sway_cmd output_cmd_enable;
+sway_cmd output_cmd_max_render_time;
 sway_cmd output_cmd_mode;
 sway_cmd output_cmd_position;
 sway_cmd output_cmd_scale;
+sway_cmd output_cmd_scale_filter;
+sway_cmd output_cmd_subpixel;
+sway_cmd output_cmd_toggle;
 sway_cmd output_cmd_transform;
 
 sway_cmd seat_cmd_attach;
 sway_cmd seat_cmd_cursor;
 sway_cmd seat_cmd_fallback;
 sway_cmd seat_cmd_hide_cursor;
+sway_cmd seat_cmd_idle_inhibit;
+sway_cmd seat_cmd_idle_wake;
+sway_cmd seat_cmd_keyboard_grouping;
 sway_cmd seat_cmd_pointer_constraint;
+sway_cmd seat_cmd_shortcuts_inhibitor;
+sway_cmd seat_cmd_xcursor_theme;
 
 sway_cmd cmd_ipc_cmd;
 sway_cmd cmd_ipc_events;

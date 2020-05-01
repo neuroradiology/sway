@@ -8,7 +8,7 @@
 /**
  * Get modifier mask from modifier name.
  *
- * Returns the modifer mask or 0 if the name isn't found.
+ * Returns the modifier mask or 0 if the name isn't found.
  */
 uint32_t get_modifier_mask_by_name(const char *name);
 
@@ -52,6 +52,10 @@ struct sway_keyboard {
 	struct sway_seat_device *seat_device;
 
 	struct xkb_keymap *keymap;
+	xkb_layout_index_t effective_layout;
+
+	int32_t repeat_rate;
+	int32_t repeat_delay;
 
 	struct wl_listener keyboard_key;
 	struct wl_listener keyboard_modifiers;
@@ -59,11 +63,23 @@ struct sway_keyboard {
 	struct sway_shortcut_state state_keysyms_translated;
 	struct sway_shortcut_state state_keysyms_raw;
 	struct sway_shortcut_state state_keycodes;
+	struct sway_shortcut_state state_pressed_sent;
 	struct sway_binding *held_binding;
 
 	struct wl_event_source *key_repeat_source;
 	struct sway_binding *repeat_binding;
 };
+
+struct sway_keyboard_group {
+	struct wlr_keyboard_group *wlr_group;
+	struct sway_seat_device *seat_device;
+	struct wl_listener keyboard_key;
+	struct wl_listener keyboard_modifiers;
+	struct wl_list link; // sway_seat::keyboard_groups
+};
+
+struct xkb_keymap *sway_keyboard_compile_keymap(struct input_config *ic,
+		char **error);
 
 struct sway_keyboard *sway_keyboard_create(struct sway_seat *seat,
 		struct sway_seat_device *device);

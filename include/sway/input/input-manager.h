@@ -2,7 +2,9 @@
 #define _SWAY_INPUT_INPUT_MANAGER_H
 #include <libinput.h>
 #include <wlr/types/wlr_input_inhibitor.h>
+#include <wlr/types/wlr_keyboard_shortcuts_inhibit_v1.h>
 #include <wlr/types/wlr_virtual_keyboard_v1.h>
+#include <wlr/types/wlr_virtual_pointer_v1.h>
 #include "sway/server.h"
 #include "sway/config.h"
 #include "list.h"
@@ -12,6 +14,7 @@ struct sway_input_device {
 	struct wlr_input_device *wlr_device;
 	struct wl_list link;
 	struct wl_listener device_destroy;
+	bool is_virtual;
 };
 
 struct sway_input_manager {
@@ -19,12 +22,16 @@ struct sway_input_manager {
 	struct wl_list seats;
 
 	struct wlr_input_inhibit_manager *inhibit;
+	struct wlr_keyboard_shortcuts_inhibit_manager_v1 *keyboard_shortcuts_inhibit;
 	struct wlr_virtual_keyboard_manager_v1 *virtual_keyboard;
+	struct wlr_virtual_pointer_manager_v1 *virtual_pointer;
 
 	struct wl_listener new_input;
 	struct wl_listener inhibit_activate;
 	struct wl_listener inhibit_deactivate;
+	struct wl_listener keyboard_shortcuts_inhibit_new_inhibitor;
 	struct wl_listener virtual_keyboard_new;
+	struct wl_listener virtual_pointer_new;
 };
 
 struct sway_input_manager *input_manager_create(struct sway_server *server);
@@ -61,5 +68,7 @@ struct sway_seat *input_manager_current_seat(void);
 struct input_config *input_device_get_config(struct sway_input_device *device);
 
 char *input_device_get_identifier(struct wlr_input_device *device);
+
+const char *input_device_get_type(struct sway_input_device *device);
 
 #endif

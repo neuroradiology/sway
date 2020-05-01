@@ -1,8 +1,7 @@
 #ifndef _SWAY_VIEW_H
 #define _SWAY_VIEW_H
-#include <wayland-server.h>
+#include <wayland-server-core.h>
 #include <wlr/types/wlr_surface.h>
-#include <wlr/types/wlr_xdg_shell_v6.h>
 #include "config.h"
 #if HAVE_XWAYLAND
 #include <wlr/xwayland.h>
@@ -14,7 +13,6 @@ struct sway_container;
 struct sway_xdg_decoration;
 
 enum sway_view_type {
-	SWAY_VIEW_XDG_SHELL_V6,
 	SWAY_VIEW_XDG_SHELL,
 #if HAVE_XWAYLAND
 	SWAY_VIEW_XWAYLAND,
@@ -82,7 +80,7 @@ struct sway_view {
 	bool allow_request_urgent;
 	struct wl_event_source *urgent_timer;
 
-	struct wlr_buffer *saved_buffer;
+	struct wlr_client_buffer *saved_buffer;
 	int saved_buffer_width, saved_buffer_height;
 
 	// The geometry for whatever the client is committing, regardless of
@@ -98,7 +96,6 @@ struct sway_view {
 	list_t *executed_criteria; // struct criteria *
 
 	union {
-		struct wlr_xdg_surface_v6 *wlr_xdg_surface_v6;
 		struct wlr_xdg_surface *wlr_xdg_surface;
 #if HAVE_XWAYLAND
 		struct wlr_xwayland_surface *wlr_xwayland_surface;
@@ -111,22 +108,8 @@ struct sway_view {
 	} events;
 
 	struct wl_listener surface_new_subsurface;
-};
 
-struct sway_xdg_shell_v6_view {
-	struct sway_view view;
-
-	struct wl_listener commit;
-	struct wl_listener request_move;
-	struct wl_listener request_resize;
-	struct wl_listener request_maximize;
-	struct wl_listener request_fullscreen;
-	struct wl_listener set_title;
-	struct wl_listener set_app_id;
-	struct wl_listener new_popup;
-	struct wl_listener map;
-	struct wl_listener unmap;
-	struct wl_listener destroy;
+	int max_render_time; // In milliseconds
 };
 
 struct sway_xdg_shell_view {
@@ -192,8 +175,11 @@ struct sway_view_child_impl {
  */
 struct sway_view_child {
 	const struct sway_view_child_impl *impl;
+	struct wl_list link;
 
 	struct sway_view *view;
+	struct sway_view_child *parent;
+	struct wl_list children; // sway_view_child::link
 	struct wlr_surface *surface;
 	bool mapped;
 
@@ -202,20 +188,12 @@ struct sway_view_child {
 	struct wl_listener surface_map;
 	struct wl_listener surface_unmap;
 	struct wl_listener surface_destroy;
+	struct wl_listener view_unmap;
 };
 
 struct sway_subsurface {
 	struct sway_view_child child;
 
-	struct wl_listener destroy;
-};
-
-struct sway_xdg_popup_v6 {
-	struct sway_view_child child;
-
-	struct wlr_xdg_surface_v6 *wlr_xdg_surface_v6;
-
-	struct wl_listener new_popup;
 	struct wl_listener destroy;
 };
 
@@ -313,7 +291,7 @@ void view_destroy(struct sway_view *view);
 void view_begin_destroy(struct sway_view *view);
 
 void view_map(struct sway_view *view, struct wlr_surface *wlr_surface,
-	bool fullscreen, bool decoration);
+	bool fullscreen, struct wlr_output *fullscreen_output, bool decoration);
 
 void view_unmap(struct sway_view *view);
 
@@ -328,8 +306,6 @@ void view_child_destroy(struct sway_view_child *child);
 
 struct sway_view *view_from_wlr_xdg_surface(
 	struct wlr_xdg_surface *xdg_surface);
-struct sway_view *view_from_wlr_xdg_surface_v6(
-	struct wlr_xdg_surface_v6 *xdg_surface_v6);
 #if HAVE_XWAYLAND
 struct sway_view *view_from_wlr_xwayland_surface(
 	struct wlr_xwayland_surface *xsurface);

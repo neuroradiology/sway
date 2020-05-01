@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
+#include <wlr/types/wlr_pointer_gestures_v1.h>
 #include <wlr/types/wlr_surface.h>
 #include "sway/input/seat.h"
 
@@ -21,6 +22,8 @@ struct sway_cursor {
 		struct sway_node *node;
 	} previous;
 	struct wlr_xcursor_manager *xcursor_manager;
+	struct wl_list tablets;
+	struct wl_list tablet_pads;
 
 	const char *image;
 	struct wl_client *image_client;
@@ -29,6 +32,14 @@ struct sway_cursor {
 
 	struct wlr_pointer_constraint_v1 *active_constraint;
 	pixman_region32_t confine; // invalid if active_constraint == NULL
+
+	struct wlr_pointer_gestures_v1 *pointer_gestures;
+	struct wl_listener pinch_begin;
+	struct wl_listener pinch_update;
+	struct wl_listener pinch_end;
+	struct wl_listener swipe_begin;
+	struct wl_listener swipe_update;
+	struct wl_listener swipe_end;
 
 	struct wl_listener motion;
 	struct wl_listener motion_absolute;
@@ -42,18 +53,19 @@ struct sway_cursor {
 
 	struct wl_listener tool_axis;
 	struct wl_listener tool_tip;
+	struct wl_listener tool_proximity;
 	struct wl_listener tool_button;
+	bool simulated_tool_tip_down;
 	uint32_t tool_buttons;
 
 	struct wl_listener request_set_cursor;
+	struct wl_listener image_surface_destroy;
 
 	struct wl_listener constraint_commit;
 
 	struct wl_event_source *hide_source;
 	bool hidden;
 
-	// Mouse binding state
-	uint32_t pressed_buttons[SWAY_CURSOR_PRESSED_BUTTONS_CAP];
 	size_t pressed_button_count;
 };
 
@@ -74,16 +86,10 @@ struct sway_cursor *sway_cursor_create(struct sway_seat *seat);
 void cursor_rebase(struct sway_cursor *cursor);
 void cursor_rebase_all(void);
 
-void cursor_handle_activity(struct sway_cursor *cursor);
+void cursor_handle_activity(struct sway_cursor *cursor,
+	enum sway_input_idle_source idle_source);
 void cursor_unhide(struct sway_cursor *cursor);
 int cursor_get_timeout(struct sway_cursor *cursor);
-
-/**
- * Like cursor_rebase, but also allows focus to change when the cursor enters a
- * new container.
- */
-void cursor_send_pointer_motion(struct sway_cursor *cursor, uint32_t time_msec,
-	struct sway_node *node, struct wlr_surface *surface, double sx, double sy);
 
 void dispatch_cursor_button(struct sway_cursor *cursor,
 	struct wlr_input_device *device, uint32_t time_msec, uint32_t button,

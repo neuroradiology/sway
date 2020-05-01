@@ -21,8 +21,6 @@ struct sway_root {
 #endif
 	struct wl_list drag_icons; // sway_drag_icon::link
 
-	struct wlr_texture *debug_tree;
-
 	// Includes disabled outputs
 	struct wl_list all_outputs; // sway_output::link
 
@@ -48,8 +46,12 @@ void root_destroy(struct sway_root *root);
 
 /**
  * Move a container to the scratchpad.
+ * If a workspace is passed, the container is assumed to have been in
+ * the scratchpad before and is shown on the workspace.
+ * The ws parameter can safely be NULL.
  */
-void root_scratchpad_add_container(struct sway_container *con);
+void root_scratchpad_add_container(struct sway_container *con,
+   struct sway_workspace *ws);
 
 /**
  * Remove a container from the scratchpad.
@@ -70,6 +72,8 @@ struct sway_workspace *root_workspace_for_pid(pid_t pid);
 
 void root_record_workspace_pid(pid_t pid);
 
+void root_remove_workspace_pid(pid_t pid);
+
 void root_for_each_workspace(void (*f)(struct sway_workspace *ws, void *data),
 		void *data);
 
@@ -86,5 +90,7 @@ struct sway_container *root_find_container(
 		bool (*test)(struct sway_container *con, void *data), void *data);
 
 void root_get_box(struct sway_root *root, struct wlr_box *box);
+
+void root_rename_pid_workspaces(const char *old_name, const char *new_name);
 
 #endif

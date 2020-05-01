@@ -1,10 +1,8 @@
 # sway
 
-[**English**](https://github.com/swaywm/sway/blob/master/README.md#sway--) - [日本語](https://github.com/swaywm/sway/blob/master/README.ja.md#sway--) - [Deutsch](https://github.com/swaywm/sway/blob/master/README.de.md#sway--) - [Ελληνικά](https://github.com/swaywm/sway/blob/master/README.el.md#sway--) - [Français](https://github.com/swaywm/sway/blob/master/README.fr.md#sway--) - [Українська](https://github.com/swaywm/sway/blob/master/README.uk.md#sway--) - [Italiano](https://github.com/swaywm/sway/blob/master/README.it.md#sway--) - [Português](https://github.com/swaywm/sway/blob/master/README.pt.md#sway--) -
-[Русский](https://github.com/swaywm/sway/blob/master/README.ru.md#sway--) - [Български](https://github.com/swaywm/sway/blob/master/README.bg.md#sway--) - [Español](https://github.com/swaywm/sway/blob/master/README.es.md#sway--) -
-[Polski](https://github.com/swaywm/sway/blob/master/README.pl.md#sway--)
+[**English**](https://github.com/swaywm/sway/blob/master/README.md#sway--) - [日本語](https://github.com/swaywm/sway/blob/master/README.ja.md#sway--) - [Français](https://github.com/swaywm/sway/blob/master/README.fr.md#sway--) - [Українська](https://github.com/swaywm/sway/blob/master/README.uk.md#sway--) - [Español](https://github.com/swaywm/sway/blob/master/README.es.md#sway--) - [Polski](https://github.com/swaywm/sway/blob/master/README.pl.md#sway--) - [中文-简体](https://github.com/swaywm/sway/blob/master/README.zh-CN.md#sway--) - [Deutsch](https://github.com/swaywm/sway/blob/master/README.de.md#sway--) - [Nederlands](https://github.com/swaywm/sway/blob/master/README.nl.md#sway--) - [Русский](https://github.com/swaywm/sway/blob/master/README.ru.md#sway--)- [中文-繁體](https://github.com/swaywm/sway/blob/master/README.zh-TW.md#sway--) - [Português](https://github.com/swaywm/sway/blob/master/README.pt.md#sway--) - [Danish](https://github.com/swaywm/sway/blob/master/README.dk.md#sway--) - [한국어](https://github.com/swaywm/sway/blob/master/README.ko.md#sway--)
 
-sway is an i3-compatible [Wayland](http://wayland.freedesktop.org/) compositor.
+sway is an [i3](https://i3wm.org/)-compatible [Wayland](http://wayland.freedesktop.org/) compositor.
 Read the [FAQ](https://github.com/swaywm/sway/wiki). Join the [IRC
 channel](http://webchat.freenode.net/?channels=sway&uio=d4) (#sway on
 irc.freenode.net).
@@ -40,13 +38,11 @@ Install dependencies:
 * json-c
 * pango
 * cairo
-* gdk-pixbuf2 \*\*
+* gdk-pixbuf2 (optional: system tray)
 * [scdoc](https://git.sr.ht/~sircmpwn/scdoc) (optional: man pages) \*
-* git \*
+* git (optional: version info) \*
 
 _\*Compile-time dep_
-
-_\*\*optional: required for swaybg_
 
 Run these commands:
 

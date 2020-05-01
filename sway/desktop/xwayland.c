@@ -1,7 +1,8 @@
 #define _POSIX_C_SOURCE 199309L
+#include <float.h>
 #include <stdbool.h>
 #include <stdlib.h>
-#include <wayland-server.h>
+#include <wayland-server-core.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/xwayland.h>
@@ -177,7 +178,10 @@ static uint32_t get_int_prop(struct sway_view *view, enum sway_view_prop prop) {
 		}
 		return 0;
 	case VIEW_PROP_WINDOW_TYPE:
-		return *view->wlr_xwayland_surface->window_type;
+		if (view->wlr_xwayland_surface->window_type_len == 0) {
+			return 0;
+		}
+		return view->wlr_xwayland_surface->window_type[0];
 	default:
 		return 0;
 	}
@@ -293,7 +297,27 @@ static void destroy(struct sway_view *view) {
 	free(xwayland_view);
 }
 
+static void get_constraints(struct sway_view *view, double *min_width,
+		double *max_width, double *min_height, double *max_height) {
+	struct wlr_xwayland_surface *surface = view->wlr_xwayland_surface;
+	struct wlr_xwayland_surface_size_hints *size_hints = surface->size_hints;
+
+	if (size_hints == NULL) {
+		*min_width = DBL_MIN;
+		*max_width = DBL_MAX;
+		*min_height = DBL_MIN;
+		*max_height = DBL_MAX;
+		return;
+	}
+
+	*min_width = size_hints->min_width > 0 ? size_hints->min_width : DBL_MIN;
+	*max_width = size_hints->max_width > 0 ? size_hints->max_width : DBL_MAX;
+	*min_height = size_hints->min_height > 0 ? size_hints->min_height : DBL_MIN;
+	*max_height = size_hints->max_height > 0 ? size_hints->max_height : DBL_MAX;
+}
+
 static const struct sway_view_impl view_impl = {
+	.get_constraints = get_constraints,
 	.get_string_prop = get_string_prop,
 	.get_int_prop = get_int_prop,
 	.configure = configure,
@@ -401,6 +425,7 @@ static void handle_map(struct wl_listener *listener, void *data) {
 		// This window used not to have the override redirect flag and has it
 		// now. Switch to unmanaged.
 		handle_destroy(&xwayland_view->destroy, view);
+		xsurface->data = NULL;
 		struct sway_xwayland_unmanaged *unmanaged = create_unmanaged(xsurface);
 		unmanaged_handle_map(&unmanaged->map, xsurface);
 		return;
@@ -415,7 +440,7 @@ static void handle_map(struct wl_listener *listener, void *data) {
 	xwayland_view->commit.notify = handle_commit;
 
 	// Put it back into the tree
-	view_map(view, xsurface->surface, xsurface->fullscreen, false);
+	view_map(view, xsurface->surface, xsurface->fullscreen, NULL, false);
 
 	transaction_commit_dirty();
 }
@@ -432,8 +457,16 @@ static void handle_request_configure(struct wl_listener *listener, void *data) {
 		return;
 	}
 	if (container_is_floating(view->container)) {
-		configure(view, view->container->current.content_x,
-				view->container->current.content_y, ev->width, ev->height);
+		// Respect minimum and maximum sizes
+		view->natural_width = ev->width;
+		view->natural_height = ev->height;
+		container_floating_resize_and_center(view->container);
+
+		configure(view, view->container->content_x,
+				view->container->content_y,
+				view->container->content_width,
+				view->container->content_height);
+		node_set_dirty(&view->container->node);
 	} else {
 		configure(view, view->container->current.content_x,
 				view->container->current.content_y,
@@ -468,7 +501,7 @@ static void handle_request_move(struct wl_listener *listener, void *data) {
 		return;
 	}
 	struct sway_seat *seat = input_manager_current_seat();
-	seatop_begin_move_floating(seat, view->container, seat->last_button);
+	seatop_begin_move_floating(seat, view->container);
 }
 
 static void handle_request_resize(struct wl_listener *listener, void *data) {
@@ -484,8 +517,7 @@ static void handle_request_resize(struct wl_listener *listener, void *data) {
 	}
 	struct wlr_xwayland_resize_event *e = data;
 	struct sway_seat *seat = input_manager_current_seat();
-	seatop_begin_resize_floating(seat, view->container,
-			seat->last_button, e->edges);
+	seatop_begin_resize_floating(seat, view->container, e->edges);
 }
 
 static void handle_request_activate(struct wl_listener *listener, void *data) {

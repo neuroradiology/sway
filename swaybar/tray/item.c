@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <arpa/inet.h>
 #include <cairo.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,7 +28,7 @@ static bool sni_ready(struct swaybar_sni *sni) {
 
 static void set_sni_dirty(struct swaybar_sni *sni) {
 	if (sni_ready(sni)) {
-		sni->min_size = sni->max_size = 0; // invalidate previous icon
+		sni->target_size = sni->min_size = sni->max_size = 0; // invalidate previous icon
 		set_bar_dirty(sni->tray->bar);
 	}
 }
@@ -107,16 +108,9 @@ error:
 	return ret;
 }
 
-struct get_property_data {
-	struct swaybar_sni *sni;
-	const char *prop;
-	const char *type;
-	void *dest;
-};
-
 static int get_property_callback(sd_bus_message *msg, void *data,
 		sd_bus_error *error) {
-	struct get_property_data *d = data;
+	struct swaybar_sni_slot *d = data;
 	struct swaybar_sni *sni = d->sni;
 	const char *prop = d->prop;
 	const char *type = d->type;
@@ -167,22 +161,26 @@ static int get_property_callback(sd_bus_message *msg, void *data,
 		set_sni_dirty(sni);
 	}
 cleanup:
+	wl_list_remove(&d->link);
 	free(data);
 	return ret;
 }
 
 static void sni_get_property_async(struct swaybar_sni *sni, const char *prop,
 		const char *type, void *dest) {
-	struct get_property_data *data = malloc(sizeof(struct get_property_data));
+	struct swaybar_sni_slot *data = calloc(1, sizeof(struct swaybar_sni_slot));
 	data->sni = sni;
 	data->prop = prop;
 	data->type = type;
 	data->dest = dest;
-	int ret = sd_bus_call_method_async(sni->tray->bus, NULL, sni->service,
+	int ret = sd_bus_call_method_async(sni->tray->bus, &data->slot, sni->service,
 			sni->path, "org.freedesktop.DBus.Properties", "Get",
 			get_property_callback, data, "ss", sni->interface, prop);
-	if (ret < 0) {
+	if (ret >= 0) {
+		wl_list_insert(&sni->slots, &data->link);
+	} else {
 		sway_log(SWAY_ERROR, "%s %s: %s", sni->watcher_id, prop, strerror(-ret));
+		free(data);
 	}
 }
 
@@ -253,13 +251,17 @@ static int handle_new_status(sd_bus_message *msg, void *data, sd_bus_error *erro
 	return ret;
 }
 
-static void sni_match_signal(struct swaybar_sni *sni, sd_bus_slot **slot,
-		char *signal, sd_bus_message_handler_t callback) {
-	int ret = sd_bus_match_signal(sni->tray->bus, slot, sni->service, sni->path,
-			sni->interface, signal, callback, sni);
-	if (ret < 0) {
-		sway_log(SWAY_ERROR, "Failed to subscribe to signal %s: %s", signal,
-				strerror(-ret));
+static void sni_match_signal_async(struct swaybar_sni *sni, char *signal,
+		sd_bus_message_handler_t callback) {
+	struct swaybar_sni_slot *slot = calloc(1, sizeof(struct swaybar_sni_slot));
+	int ret = sd_bus_match_signal_async(sni->tray->bus, &slot->slot,
+			sni->service, sni->path, sni->interface, signal, callback, NULL, sni);
+	if (ret >= 0) {
+		wl_list_insert(&sni->slots, &slot->link);
+	} else {
+		sway_log(SWAY_ERROR, "%s failed to subscribe to signal %s: %s",
+				sni->service, signal, strerror(-ret));
+		free(slot);
 	}
 }
 
@@ -269,6 +271,7 @@ struct swaybar_sni *create_sni(char *id, struct swaybar_tray *tray) {
 		return NULL;
 	}
 	sni->tray = tray;
+	wl_list_init(&sni->slots);
 	sni->watcher_id = strdup(id);
 	char *path_ptr = strchr(id, '/');
 	if (!path_ptr) {
@@ -292,10 +295,9 @@ struct swaybar_sni *create_sni(char *id, struct swaybar_tray *tray) {
 	sni_get_property_async(sni, "ItemIsMenu", "b", &sni->item_is_menu);
 	sni_get_property_async(sni, "Menu", "o", &sni->menu);
 
-	sni_match_signal(sni, &sni->new_icon_slot, "NewIcon", handle_new_icon);
-	sni_match_signal(sni, &sni->new_attention_icon_slot, "NewAttentionIcon",
-			handle_new_attention_icon);
-	sni_match_signal(sni, &sni->new_status_slot, "NewStatus", handle_new_status);
+	sni_match_signal_async(sni, "NewIcon", handle_new_icon);
+	sni_match_signal_async(sni, "NewAttentionIcon", handle_new_attention_icon);
+	sni_match_signal_async(sni, "NewStatus", handle_new_status);
 
 	return sni;
 }
@@ -306,11 +308,6 @@ void destroy_sni(struct swaybar_sni *sni) {
 	}
 
 	cairo_surface_destroy(sni->icon);
-
-	sd_bus_slot_unref(sni->new_icon_slot);
-	sd_bus_slot_unref(sni->new_attention_icon_slot);
-	sd_bus_slot_unref(sni->new_status_slot);
-
 	free(sni->watcher_id);
 	free(sni->service);
 	free(sni->path);
@@ -321,6 +318,13 @@ void destroy_sni(struct swaybar_sni *sni) {
 	list_free_items_and_destroy(sni->attention_icon_pixmap);
 	free(sni->menu);
 	free(sni->icon_theme_path);
+
+	struct swaybar_sni_slot *slot, *slot_tmp;
+	wl_list_for_each_safe(slot, slot_tmp, &sni->slots, link) {
+		sd_bus_slot_unref(slot->slot);
+		free(slot);
+	}
+
 	free(sni);
 }
 
@@ -376,7 +380,7 @@ static int cmp_sni_id(const void *item, const void *cmp_to) {
 
 static enum hotspot_event_handling icon_hotspot_callback(
 		struct swaybar_output *output, struct swaybar_hotspot *hotspot,
-		int x, int y, uint32_t button, void *data) {
+		double x, double y, uint32_t button, void *data) {
 	sway_log(SWAY_DEBUG, "Clicked on %s", (char *)data);
 
 	struct swaybar_tray *tray = output->bar->tray;
@@ -401,63 +405,71 @@ static enum hotspot_event_handling icon_hotspot_callback(
 	return HOTSPOT_PROCESS;
 }
 
+static void reload_sni(struct swaybar_sni *sni, char *icon_theme,
+		int target_size) {
+	char *icon_name = sni->status[0] == 'N' ?
+		sni->attention_icon_name : sni->icon_name;
+	if (icon_name) {
+		list_t *icon_search_paths = create_list();
+		list_cat(icon_search_paths, sni->tray->basedirs);
+		if (sni->icon_theme_path) {
+			list_add(icon_search_paths, sni->icon_theme_path);
+		}
+		char *icon_path = find_icon(sni->tray->themes, icon_search_paths,
+				icon_name, target_size, icon_theme,
+				&sni->min_size, &sni->max_size);
+		list_free(icon_search_paths);
+		if (icon_path) {
+			cairo_surface_destroy(sni->icon);
+			sni->icon = load_background_image(icon_path);
+			free(icon_path);
+			return;
+		}
+	}
+
+	list_t *pixmaps = sni->status[0] == 'N' ?
+		sni->attention_icon_pixmap : sni->icon_pixmap;
+	if (pixmaps) {
+		struct swaybar_pixmap *pixmap = NULL;
+		int min_error = INT_MAX;
+		for (int i = 0; i < pixmaps->length; ++i) {
+			struct swaybar_pixmap *p = pixmaps->items[i];
+			int e = abs(target_size - p->size);
+			if (e < min_error) {
+				pixmap = p;
+				min_error = e;
+			}
+		}
+		cairo_surface_destroy(sni->icon);
+		sni->icon = cairo_image_surface_create_for_data(pixmap->pixels,
+				CAIRO_FORMAT_ARGB32, pixmap->size, pixmap->size,
+				cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, pixmap->size));
+	}
+}
+
 uint32_t render_sni(cairo_t *cairo, struct swaybar_output *output, double *x,
 		struct swaybar_sni *sni) {
 	uint32_t height = output->height * output->scale;
 	int padding = output->bar->config->tray_padding;
-	int ideal_size = height - 2*padding;
-	if ((ideal_size < sni->min_size || ideal_size > sni->max_size) && sni_ready(sni)) {
-		bool icon_found = false;
-		char *icon_name = sni->status[0] == 'N' ?
-			sni->attention_icon_name : sni->icon_name;
-		if (icon_name) {
-			char *icon_path = find_icon(sni->tray->themes, sni->tray->basedirs,
-					icon_name, ideal_size, output->bar->config->icon_theme,
-					&sni->min_size, &sni->max_size);
-			if (!icon_path && sni->icon_theme_path) {
-				icon_path = find_icon_in_dir(icon_name, sni->icon_theme_path,
-						&sni->min_size, &sni->max_size);
-			}
-			if (icon_path) {
-				cairo_surface_destroy(sni->icon);
-				sni->icon = load_background_image(icon_path);
-				free(icon_path);
-				icon_found = true;
-			}
+	int target_size = height - 2*padding;
+	if (target_size != sni->target_size && sni_ready(sni)) {
+		// check if another icon should be loaded
+		if (target_size < sni->min_size || target_size > sni->max_size) {
+			reload_sni(sni, output->bar->config->icon_theme, target_size);
 		}
-		if (!icon_found) {
-			list_t *pixmaps = sni->status[0] == 'N' ?
-				sni->attention_icon_pixmap : sni->icon_pixmap;
-			if (pixmaps) {
-				int idx = -1;
-				unsigned smallest_error = -1; // UINT_MAX
-				for (int i = 0; i < pixmaps->length; ++i) {
-					struct swaybar_pixmap *pixmap = pixmaps->items[i];
-					unsigned error = (ideal_size - pixmap->size) *
-						(ideal_size < pixmap->size ? -1 : 1);
-					if (error < smallest_error) {
-						smallest_error = error;
-						idx = i;
-					}
-				}
-				struct swaybar_pixmap *pixmap = pixmaps->items[idx];
-				cairo_surface_destroy(sni->icon);
-				sni->icon = cairo_image_surface_create_for_data(pixmap->pixels,
-						CAIRO_FORMAT_ARGB32, pixmap->size, pixmap->size,
-						cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, pixmap->size));
-			}
-		}
+
+		sni->target_size = target_size;
 	}
 
 	int icon_size;
 	cairo_surface_t *icon;
 	if (sni->icon) {
 		int actual_size = cairo_image_surface_get_height(sni->icon);
-		icon_size = actual_size < ideal_size ?
-			actual_size*(ideal_size/actual_size) : ideal_size;
+		icon_size = actual_size < target_size ?
+			actual_size*(target_size/actual_size) : target_size;
 		icon = cairo_image_surface_scale(sni->icon, icon_size, icon_size);
 	} else { // draw a :(
-		icon_size = ideal_size*0.8;
+		icon_size = target_size*0.8;
 		icon = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, icon_size, icon_size);
 		cairo_t *cairo_icon = cairo_create(icon);
 		cairo_set_source_u32(cairo_icon, 0xFF0000FF);

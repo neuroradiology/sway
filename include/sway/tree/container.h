@@ -88,6 +88,15 @@ struct sway_container {
 	double saved_x, saved_y;
 	double saved_width, saved_height;
 
+	// The share of the space of parent container this container occupies
+	double width_fraction;
+	double height_fraction;
+
+	// The share of space of the parent container that all children occupy
+	// Used for doing the resize calculations
+	double child_total_width;
+	double child_total_height;
+
 	// These are in layout coordinates.
 	double content_x, content_y;
 	int content_width, content_height;
@@ -111,14 +120,6 @@ struct sway_container {
 	bool border_bottom;
 	bool border_left;
 	bool border_right;
-
-	// The gaps currently applied to the container.
-	struct {
-		int top;
-		int right;
-		int bottom;
-		int left;
-	} current_gaps;
 
 	struct sway_workspace *workspace; // NULL when hidden in the scratchpad
 	struct sway_container *parent;    // NULL if container in root of workspace
@@ -215,10 +216,9 @@ size_t container_titlebar_height(void);
 void floating_calculate_constraints(int *min_width, int *max_width,
 		int *min_height, int *max_height);
 
-/**
- * Resize and center the container in its workspace.
- */
-void container_init_floating(struct sway_container *container);
+void container_floating_resize_and_center(struct sway_container *con);
+
+void container_floating_set_default_size(struct sway_container *con);
 
 void container_set_floating(struct sway_container *container, bool enable);
 
@@ -293,10 +293,6 @@ struct sway_output *container_get_effective_output(struct sway_container *con);
 
 void container_discover_outputs(struct sway_container *con);
 
-void container_remove_gaps(struct sway_container *container);
-
-void container_add_gaps(struct sway_container *container);
-
 enum sway_container_layout container_parent_layout(struct sway_container *con);
 
 enum sway_container_layout container_current_parent_layout(
@@ -326,6 +322,8 @@ void container_detach(struct sway_container *child);
 
 void container_replace(struct sway_container *container,
 		struct sway_container *replacement);
+
+void container_swap(struct sway_container *con1, struct sway_container *con2);
 
 struct sway_container *container_split(struct sway_container *child,
 		enum sway_container_layout layout);
@@ -358,5 +356,7 @@ void container_update_marks_textures(struct sway_container *container);
 void container_raise_floating(struct sway_container *con);
 
 bool container_is_scratchpad_hidden(struct sway_container *con);
+
+bool container_is_scratchpad_hidden_or_child(struct sway_container *con);
 
 #endif

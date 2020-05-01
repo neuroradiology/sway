@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include "sway/config.h"
@@ -17,6 +18,8 @@ struct seat_config *new_seat_config(const char* name) {
 		return NULL;
 	}
 
+	seat->idle_inhibit_sources = seat->idle_wake_sources = UINT32_MAX;
+
 	seat->fallback = -1;
 	seat->attachments = create_list();
 	if (!sway_assert(seat->attachments,
@@ -27,6 +30,10 @@ struct seat_config *new_seat_config(const char* name) {
 	}
 	seat->hide_cursor_timeout = -1;
 	seat->allow_constrain = CONSTRAIN_DEFAULT;
+	seat->shortcuts_inhibit = SHORTCUTS_INHIBIT_DEFAULT;
+	seat->keyboard_grouping = KEYBOARD_GROUP_DEFAULT;
+	seat->xcursor_theme.name = NULL;
+	seat->xcursor_theme.size = 24;
 
 	return seat;
 }
@@ -147,6 +154,28 @@ void merge_seat_config(struct seat_config *dest, struct seat_config *source) {
 	if (source->allow_constrain != CONSTRAIN_DEFAULT) {
 		dest->allow_constrain = source->allow_constrain;
 	}
+
+	if (source->shortcuts_inhibit != SHORTCUTS_INHIBIT_DEFAULT) {
+		dest->shortcuts_inhibit = source->shortcuts_inhibit;
+	}
+
+	if (source->keyboard_grouping != KEYBOARD_GROUP_DEFAULT) {
+		dest->keyboard_grouping = source->keyboard_grouping;
+	}
+
+	if (source->xcursor_theme.name != NULL) {
+		free(dest->xcursor_theme.name);
+		dest->xcursor_theme.name = strdup(source->xcursor_theme.name);
+		dest->xcursor_theme.size = source->xcursor_theme.size;
+	}
+
+	if (source->idle_inhibit_sources != UINT32_MAX) {
+		dest->idle_inhibit_sources = source->idle_inhibit_sources;
+	}
+
+	if (source->idle_wake_sources != UINT32_MAX) {
+		dest->idle_wake_sources = source->idle_wake_sources;
+	}
 }
 
 struct seat_config *copy_seat_config(struct seat_config *seat) {
@@ -170,6 +199,7 @@ void free_seat_config(struct seat_config *seat) {
 		seat_attachment_config_free(seat->attachments->items[i]);
 	}
 	list_free(seat->attachments);
+	free(seat->xcursor_theme.name);
 	free(seat);
 }
 

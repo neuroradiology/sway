@@ -15,8 +15,6 @@
 #define AXIS_HORIZONTAL (WLR_EDGE_LEFT | WLR_EDGE_RIGHT)
 #define AXIS_VERTICAL   (WLR_EDGE_TOP | WLR_EDGE_BOTTOM)
 
-static const int MIN_SANE_W = 100, MIN_SANE_H = 60;
-
 enum resize_unit {
 	RESIZE_UNIT_PX,
 	RESIZE_UNIT_PPT,
@@ -162,7 +160,7 @@ void container_resize_tiled(struct sway_container *con,
 	}
 
 	// Apply new dimensions
-	int sibling_amount = prev ? amount / 2 : amount;
+	int sibling_amount = prev ? ceil((double)amount / 2.0) : amount;
 
 	if (is_horizontal(axis)) {
 		if (con->width + amount < MIN_SANE_W) {
@@ -174,10 +172,26 @@ void container_resize_tiled(struct sway_container *con,
 		if (prev && prev->width - sibling_amount < MIN_SANE_W) {
 			return;
 		}
-		con->width += amount;
-		next->width -= sibling_amount;
+		if (con->child_total_width <= 0) {
+			return;
+		}
+
+		// We're going to resize so snap all the width fractions to full pixels
+		// to avoid rounding issues
+		list_t *siblings = container_get_siblings(con);
+		for (int i = 0; i < siblings->length; ++i) {
+			struct sway_container *con = siblings->items[i];
+			con->width_fraction = con->width / con->child_total_width;
+		}
+
+		double amount_fraction = (double)amount / con->child_total_width;
+		double sibling_amount_fraction =
+			prev ? amount_fraction / 2.0 : amount_fraction;
+
+		con->width_fraction += amount_fraction;
+		next->width_fraction -= sibling_amount_fraction;
 		if (prev) {
-			prev->width -= sibling_amount;
+			prev->width_fraction -= sibling_amount_fraction;
 		}
 	} else {
 		if (con->height + amount < MIN_SANE_H) {
@@ -189,10 +203,26 @@ void container_resize_tiled(struct sway_container *con,
 		if (prev && prev->height - sibling_amount < MIN_SANE_H) {
 			return;
 		}
-		con->height += amount;
-		next->height -= sibling_amount;
+		if (con->child_total_height <= 0) {
+			return;
+		}
+
+		// We're going to resize so snap all the height fractions to full pixels
+		// to avoid rounding issues
+		list_t *siblings = container_get_siblings(con);
+		for (int i = 0; i < siblings->length; ++i) {
+			struct sway_container *con = siblings->items[i];
+			con->height_fraction = con->height / con->child_total_height;
+		}
+
+		double amount_fraction = (double)amount / con->child_total_height;
+		double sibling_amount_fraction =
+			prev ? amount_fraction / 2.0 : amount_fraction;
+
+		con->height_fraction += amount_fraction;
+		next->height_fraction -= sibling_amount_fraction;
 		if (prev) {
-			prev->height -= sibling_amount;
+			prev->height_fraction -= sibling_amount_fraction;
 		}
 	}
 
@@ -280,10 +310,11 @@ static struct cmd_results *resize_adjust_tiled(uint32_t axis,
 		}
 	}
 
-	double old_width = current->width;
-	double old_height = current->height;
+	double old_width = current->width_fraction;
+	double old_height = current->height_fraction;
 	container_resize_tiled(current, axis, amount->amount);
-	if (current->width == old_width && current->height == old_height) {
+	if (current->width_fraction == old_width &&
+			current->height_fraction == old_height) {
 		return cmd_results_new(CMD_INVALID, "Cannot resize any further");
 	}
 	return cmd_results_new(CMD_SUCCESS, NULL);

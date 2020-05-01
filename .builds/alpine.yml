@@ -12,6 +12,7 @@ packages:
   - meson
   - pango-dev
   - pixman-dev
+  - scdoc
   - wayland-dev
   - wayland-protocols
   - xcb-util-image-dev
@@ -19,20 +20,15 @@ packages:
 sources:
   - https://github.com/swaywm/sway
   - https://github.com/swaywm/wlroots
-  - https://git.sr.ht/~sircmpwn/scdoc
 tasks:
-  - scdoc: |
-      cd scdoc
-      make PREFIX=/usr
-      sudo make install PREFIX=/usr
   - wlroots: |
       cd wlroots
-      meson --prefix=/usr build -Drootston=false -Dexamples=false
+      meson --prefix=/usr build -Dexamples=false
       ninja -C build
       sudo ninja -C build install
   - setup: |
       cd sway
-      meson build
+      meson build -Dauto_features=enabled -Dtray=disabled
   - build: |
       cd sway
       ninja -C build

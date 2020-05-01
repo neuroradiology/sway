@@ -23,6 +23,7 @@ struct swaybar {
 	// only relevant when bar is in "hide" mode
 	bool visible_by_modifier;
 	bool visible_by_urgency;
+	bool visible_by_mode;
 	bool visible;
 
 	struct wl_display *display;
@@ -30,11 +31,8 @@ struct swaybar {
 	struct zwlr_layer_shell_v1 *layer_shell;
 	struct zxdg_output_manager_v1 *xdg_output_manager;
 	struct wl_shm *shm;
-	struct wl_seat *seat;
 
 	struct swaybar_config *config;
-	struct swaybar_pointer pointer;
-	struct swaybar_touch touch;
 	struct status_line *status;
 
 	struct loop *eventloop;
@@ -43,6 +41,8 @@ struct swaybar {
 	int ipc_socketfd;
 
 	struct wl_list outputs; // swaybar_output::link
+	struct wl_list unused_outputs; // swaybar_output::link
+	struct wl_list seats; // swaybar_seat::link
 
 #if HAVE_TRAY
 	struct swaybar_tray *tray;
@@ -109,5 +109,9 @@ void set_bar_dirty(struct swaybar *bar);
  */
 bool determine_bar_visibility(struct swaybar *bar, bool moving_layer);
 void free_workspaces(struct wl_list *list);
+
+void status_in(int fd, short mask, void *data);
+
+void destroy_layer_surface(struct swaybar_output *output);
 
 #endif

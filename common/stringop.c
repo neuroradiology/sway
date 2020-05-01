@@ -1,13 +1,14 @@
 #define _POSIX_C_SOURCE 200809L
-#include <stdlib.h>
+#include <ctype.h>
+#include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <ctype.h>
-#include "stringop.h"
-#include "log.h"
-#include "string.h"
+#include <wordexp.h>
 #include "list.h"
+#include "log.h"
+#include "stringop.h"
 
 static const char whitespace[] = " \f\n\r\t\v";
 
@@ -78,12 +79,10 @@ int lenient_strcmp(char *a, char *b) {
 list_t *split_string(const char *str, const char *delims) {
 	list_t *res = create_list();
 	char *copy = strdup(str);
-	char *token;
 
-	token = strtok(copy, delims);
-	while(token) {
-		token = strdup(token);
-		list_add(res, token);
+	char *token = strtok(copy, delims);
+	while (token) {
+		list_add(res, strdup(token));
 		token = strtok(NULL, delims);
 	}
 	free(copy);
@@ -97,7 +96,7 @@ char **split_args(const char *start, int *argc) {
 	bool in_token = false;
 	bool in_string = false;
 	bool in_char = false;
-	bool in_brackets = false; // brackets are used for critera
+	bool in_brackets = false; // brackets are used for criteria
 	bool escaped = false;
 	const char *end = start;
 	if (start) {
@@ -148,29 +147,6 @@ void free_argv(int argc, char **argv) {
 		free(argv[argc]);
 	}
 	free(argv);
-}
-
-char *code_strstr(const char *haystack, const char *needle) {
-	/* TODO */
-	return strstr(haystack, needle);
-}
-
-char *code_strchr(const char *str, char delimiter) {
-	int in_string = 0, in_character = 0;
-	int i = 0;
-	while (str[i] != '\0') {
-		if (str[i] == '"' && !in_character) {
-			in_string = !in_string;
-		} else if (str[i] == '\'' && !in_string) {
-			in_character = !in_character;
-		} else if (!in_character && !in_string) {
-			if (str[i] == delimiter) {
-				return (char *)str + i;
-			}
-		}
-		++i;
-	}
-	return NULL;
 }
 
 int unescape_string(char *string) {
@@ -276,130 +252,79 @@ char *join_args(char **argv, int argc) {
 	return res;
 }
 
-static bool has_whitespace(const char *str) {
-	while (*str) {
-		if (isspace(*str)) {
-			return true;
-		}
-		++str;
+static inline char *argsep_next_interesting(const char *src, const char *delim) {
+	char *special = strpbrk(src, "\"'\\");
+	char *next_delim = strpbrk(src, delim);
+	if (!special) {
+		return next_delim;
 	}
-	return false;
+	if (!next_delim) {
+		return special;
+	}
+	return (next_delim < special) ? next_delim : special;
 }
 
-/**
- * Add quotes around any argv with whitespaces.
- */
-void add_quotes(char **argv, int argc) {
-	int i;
-	for (i = 0; i < argc; ++i) {
-		if (has_whitespace(argv[i])) {
-			int len = strlen(argv[i]) + 3;
-			char *tmp = argv[i];
-			argv[i] = malloc(len * sizeof(char));
-			snprintf(argv[i], len, "\"%s\"", tmp);
-			free(tmp);
-		}
-	}
-}
-
-/*
- * Join a list of strings, adding separator in between. Separator can be NULL.
- */
-char *join_list(list_t *list, char *separator) {
-	if (!sway_assert(list != NULL, "list != NULL") || list->length == 0) {
-		return NULL;
-	}
-
-	size_t len = 1; // NULL terminator
-	size_t sep_len = 0;
-	if (separator != NULL) {
-		sep_len = strlen(separator);
-		len += (list->length - 1) * sep_len;
-	}
-
-	for (int i = 0; i < list->length; i++) {
-		len += strlen(list->items[i]);
-	}
-
-	char *res = malloc(len);
-
-	char *p = res + strlen(list->items[0]);
-	strcpy(res, list->items[0]);
-
-	for (int i = 1; i < list->length; i++) {
-		if (sep_len) {
-			memcpy(p, separator, sep_len);
-			p += sep_len;
-		}
-		strcpy(p, list->items[i]);
-		p += strlen(list->items[i]);
-	}
-
-	*p = '\0';
-
-	return res;
-}
-
-char *cmdsep(char **stringp, const char *delim) {
-	// skip over leading delims
-	char *head = *stringp + strspn(*stringp, delim);
-	// Find end token
-	char *tail = *stringp += strcspn(*stringp, delim);
-	// Set stringp to beginning of next token
-	*stringp += strspn(*stringp, delim);
-	// Set stringp to null if last token
-	if (!**stringp) *stringp = NULL;
-	// Nullify end of first token
-	*tail = 0;
-	return head;
-}
-
-char *argsep(char **stringp, const char *delim) {
+char *argsep(char **stringp, const char *delim, char *matched) {
 	char *start = *stringp;
 	char *end = start;
 	bool in_string = false;
 	bool in_char = false;
 	bool escaped = false;
-	while (1) {
-		if (*end == '"' && !in_char && !escaped) {
-			in_string = !in_string;
-		} else if (*end == '\'' && !in_string && !escaped) {
-			in_char = !in_char;
-		} else if (*end == '\\') {
-			escaped = !escaped;
-		} else if (*end == '\0') {
-			*stringp = NULL;
-			goto found;
-		} else if (!in_string && !in_char && !escaped && strchr(delim, *end)) {
-			if (end - start) {
-				*(end++) = 0;
-				*stringp = end + strspn(end, delim);;
-				if (!**stringp) *stringp = NULL;
-				goto found;
-			} else {
-				++start;
-				end = start;
-			}
-		}
-		if (*end != '\\') {
+	char *interesting = NULL;
+
+	while ((interesting = argsep_next_interesting(end, delim))) {
+		if (escaped && interesting != end) {
 			escaped = false;
 		}
-		++end;
+		if (*interesting == '"' && !in_char && !escaped) {
+			in_string = !in_string;
+			end = interesting + 1;
+		} else if (*interesting == '\'' && !in_string && !escaped) {
+			in_char = !in_char;
+			end = interesting + 1;
+		} else if (*interesting == '\\') {
+			escaped = !escaped;
+			end = interesting + 1;
+		} else if (!in_string && !in_char && !escaped) {
+			// We must have matched a separator
+			end = interesting;
+			if (matched) {
+				*matched = *end;
+			}
+			if (end - start) {
+				*(end++) = 0;
+				*stringp = end;
+				break;
+			} else {
+				end = ++start;
+			}
+		} else {
+			end++;
+		}
 	}
-	found:
+	if (!interesting) {
+		*stringp = NULL;
+		if (matched) {
+			*matched = '\0';
+		}
+	}
 	return start;
 }
 
-const char *strcasestr(const char *haystack, const char *needle) {
-	size_t needle_len = strlen(needle);
-	const char *pos = haystack;
-	const char *end = pos + strlen(haystack) - needle_len;
-
-	while (pos <= end) {
-		if (strncasecmp(pos, needle, needle_len) == 0) {
-			return pos;
-		}
-		++pos;
+bool expand_path(char **path) {
+	wordexp_t p = {0};
+	while (strstr(*path, "  ")) {
+		*path = realloc(*path, strlen(*path) + 2);
+		char *ptr = strstr(*path, "  ") + 1;
+		memmove(ptr + 1, ptr, strlen(ptr) + 1);
+		*ptr = '\\';
 	}
-	return NULL;
+	if (wordexp(*path, &p, 0) != 0 || p.we_wordv[0] == NULL) {
+		wordfree(&p);
+		return false;
+	}
+	free(*path);
+	*path = join_args(p.we_wordv, p.we_wordc);
+	wordfree(&p);
+	return true;
 }

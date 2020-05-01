@@ -54,29 +54,46 @@ void root_destroy(struct sway_root *root) {
 	free(root);
 }
 
-void root_scratchpad_add_container(struct sway_container *con) {
+void root_scratchpad_add_container(struct sway_container *con, struct sway_workspace *ws) {
 	if (!sway_assert(!con->scratchpad, "Container is already in scratchpad")) {
 		return;
 	}
 
 	struct sway_container *parent = con->parent;
 	struct sway_workspace *workspace = con->workspace;
-	container_set_floating(con, true);
+
+	// Clear the fullscreen mode when sending to the scratchpad
+	if (con->fullscreen_mode != FULLSCREEN_NONE) {
+		container_fullscreen_disable(con);
+	}
+
+	// When a tiled window is sent to scratchpad, center and resize it.
+	if (!container_is_floating(con)) {
+		container_set_floating(con, true);
+		container_floating_set_default_size(con);
+		container_floating_move_to_center(con);
+	}
+
 	container_detach(con);
 	con->scratchpad = true;
 	list_add(root->scratchpad, con);
+	if (ws) {
+		workspace_add_floating(ws, con);
+	}
 
-	struct sway_seat *seat = input_manager_current_seat();
-	struct sway_node *new_focus = NULL;
-	if (parent) {
-		arrange_container(parent);
-		new_focus = seat_get_focus_inactive(seat, &parent->node);
+	if (!ws) {
+		struct sway_seat *seat = input_manager_current_seat();
+		struct sway_node *new_focus = NULL;
+		if (parent) {
+			arrange_container(parent);
+			new_focus = seat_get_focus_inactive(seat, &parent->node);
+		}
+		if (!new_focus) {
+			arrange_workspace(workspace);
+			new_focus = seat_get_focus_inactive(seat, &workspace->node);
+		}
+		seat_set_focus(seat, new_focus);
 	}
-	if (!new_focus) {
-		arrange_workspace(workspace);
-		new_focus = seat_get_focus_inactive(seat, &workspace->node);
-	}
-	seat_set_focus(seat, new_focus);
 
 	ipc_event_window(con, "move");
 }
@@ -96,6 +113,10 @@ void root_scratchpad_remove_container(struct sway_container *con) {
 void root_scratchpad_show(struct sway_container *con) {
 	struct sway_seat *seat = input_manager_current_seat();
 	struct sway_workspace *new_ws = seat_get_focused_workspace(seat);
+	if (!new_ws) {
+		sway_log(SWAY_DEBUG, "No focused workspace to show scratchpad on");
+		return;
+	}
 	struct sway_workspace *old_ws = con->workspace;
 
 	// If the current con or any of its parents are in fullscreen mode, we
@@ -110,6 +131,12 @@ void root_scratchpad_show(struct sway_container *con) {
 	// Show the container
 	if (old_ws) {
 		container_detach(con);
+		workspace_consider_destroy(old_ws);
+	} else {
+		// Act on the ancestor of scratchpad hidden split containers
+		while (con->parent) {
+			con = con->parent;
+		}
 	}
 	workspace_add_floating(new_ws, con);
 
@@ -120,26 +147,32 @@ void root_scratchpad_show(struct sway_container *con) {
 	struct wlr_box workspace_box;
 	workspace_get_box(new_ws, &workspace_box);
 	if (!wlr_box_contains_point(&workspace_box, center_lx, center_ly)) {
-		// Maybe resize it
-		if (con->width > new_ws->width || con->height > new_ws->height) {
-			container_init_floating(con);
-		}
-
-		// Center it
-		double new_lx = new_ws->x + (new_ws->width - con->width) / 2;
-		double new_ly = new_ws->y + (new_ws->height - con->height) / 2;
-		container_floating_move_to(con, new_lx, new_ly);
+		container_floating_resize_and_center(con);
 	}
 
 	arrange_workspace(new_ws);
 	seat_set_focus(seat, seat_get_focus_inactive(seat, &con->node));
 }
 
+static void disable_fullscreen(struct sway_container *con, void *data) {
+	if (con->fullscreen_mode != FULLSCREEN_NONE) {
+		container_fullscreen_disable(con);
+	}
+}
+
 void root_scratchpad_hide(struct sway_container *con) {
 	struct sway_seat *seat = input_manager_current_seat();
-	struct sway_node *focus = seat_get_focus(seat);
+	struct sway_node *focus = seat_get_focus_inactive(seat, &root->node);
 	struct sway_workspace *ws = con->workspace;
 
+	if (con->fullscreen_mode == FULLSCREEN_GLOBAL && !con->workspace) {
+		// If the container was made fullscreen global while in the scratchpad,
+		// it should be shown until fullscreen has been disabled
+		return;
+	}
+
+	disable_fullscreen(con, NULL);
+	container_for_each_child(con, disable_fullscreen, NULL);
 	container_detach(con);
 	arrange_workspace(ws);
 	if (&con->node == focus || node_has_ancestor(focus, &con->node)) {
@@ -197,6 +230,13 @@ static pid_t get_parent_pid(pid_t child) {
 	return -1;
 }
 
+static void pid_workspace_destroy(struct pid_workspace *pw) {
+	wl_list_remove(&pw->output_destroy.link);
+	wl_list_remove(&pw->link);
+	free(pw->workspace);
+	free(pw);
+}
+
 struct sway_workspace *root_workspace_for_pid(pid_t pid) {
 	if (!pid_workspaces.prev && !pid_workspaces.next) {
 		wl_list_init(&pid_workspaces);
@@ -233,10 +273,7 @@ found:
 			ws = workspace_create(pw->output, pw->workspace);
 		}
 
-		wl_list_remove(&pw->output_destroy.link);
-		wl_list_remove(&pw->link);
-		free(pw->workspace);
-		free(pw);
+		pid_workspace_destroy(pw);
 	}
 
 	return ws;
@@ -275,10 +312,7 @@ void root_record_workspace_pid(pid_t pid) {
 	struct pid_workspace *old, *_old;
 	wl_list_for_each_safe(old, _old, &pid_workspaces, link) {
 		if (now.tv_sec - old->time_added.tv_sec >= timeout) {
-			wl_list_remove(&old->output_destroy.link);
-			wl_list_remove(&old->link);
-			free(old->workspace);
-			free(old);
+			pid_workspace_destroy(old);
 		}
 	}
 
@@ -290,6 +324,20 @@ void root_record_workspace_pid(pid_t pid) {
 	pw->output_destroy.notify = pw_handle_output_destroy;
 	wl_signal_add(&output->wlr_output->events.destroy, &pw->output_destroy);
 	wl_list_insert(&pid_workspaces, &pw->link);
+}
+
+void root_remove_workspace_pid(pid_t pid) {
+	if (!pid_workspaces.prev || !pid_workspaces.next) {
+		return;
+	}
+
+	struct pid_workspace *pw, *tmp;
+	wl_list_for_each_safe(pw, tmp, &pid_workspaces, link) {
+		if (pid == pw->pid) {
+			pid_workspace_destroy(pw);
+			return;
+		}
+	}
 }
 
 void root_for_each_workspace(void (*f)(struct sway_workspace *ws, void *data),
@@ -385,4 +433,18 @@ void root_get_box(struct sway_root *root, struct wlr_box *box) {
 	box->y = root->y;
 	box->width = root->width;
 	box->height = root->height;
+}
+
+void root_rename_pid_workspaces(const char *old_name, const char *new_name) {
+	if (!pid_workspaces.prev && !pid_workspaces.next) {
+		wl_list_init(&pid_workspaces);
+	}
+
+	struct pid_workspace *pw = NULL;
+	wl_list_for_each(pw, &pid_workspaces, link) {
+		if (strcmp(pw->workspace, old_name) == 0) {
+			free(pw->workspace);
+			pw->workspace = strdup(new_name);
+		}
+	}
 }

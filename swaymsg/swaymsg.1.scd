@@ -19,6 +19,9 @@ _swaymsg_ [options...] [message]
 	there is a malformed response or an invalid event type was requested,
 	swaymsg will stop monitoring and exit.
 
+*-p, --pretty*
+	Use pretty output even when not using a tty.
+
 *-q, --quiet*
 	Sends the IPC message but does not print the response from sway.
 
@@ -42,6 +45,11 @@ _swaymsg_ [options...] [message]
 	in your sway config file). It will be executed immediately.
 
 	See **sway**(5) for a list of commands.
+
+	Tip: If you are proving a command that contains a leading hyphen (_-_),
+	insert two hyphens (_--_) before the command to signal to swaymsg not to
+	parse anything beyond that point as an option. For example, use
+	_swaymsg -- mark --add test_ instead of _swaymsg mark --add test_
 
 *get\_workspaces*
 	Gets a JSON-encoded list of workspaces and their status.
@@ -81,7 +89,20 @@ _swaymsg_ [options...] [message]
 *subscribe*
 	Subscribe to a list of event types. The argument for this type should be
 	provided in the form of a valid JSON array. If any of the types are invalid
-	or if an valid JSON array is not provided, this will result in an failure.
+	or if a valid JSON array is not provided, this will result in a failure.
+
+# RETURN CODES
+
+*0*
+	Success
+
+*1*
+	swaymsg errors such as invalid syntax, unable to connect to the ipc socket
+	or unable to parse sway's reply
+
+*2*
+	Sway returned an error when processing the command (ex. invalid command,
+	command failed, and invalid subscription request)
 
 # SEE ALSO
 

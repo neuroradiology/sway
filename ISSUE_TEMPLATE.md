@@ -1,9 +1,13 @@
-If you are using the nvidia proprietary driver for any reason, you have two choices:
+If you want to ask a question, please check out the wiki. If you don't find an answer there, ask on IRC (#sway on irc.freenode.net). The issue tracker may not be used for questions.
+
+If you are using the Nvidia proprietary driver for any reason, you have two choices:
 
 1. Uninstall it and use nouveau instead
 2. Use X11+i3 and close your browser tab
 
 If `lsmod | grep nvidia | wc -l` shows anything other than zero, your bug report is not welcome here.
+
+Additionally, problems with Firefox are almost certainly Firefox bugs, not sway bugs. Start by submitting your issue to the Firefox Bugzilla and come back here only after they confirm otherwise.
 
 Otherwise, please include the following four components in your bug report: sway version, debug log, configuration (if applicable), and an explanation of steps taken to reproduce the issue. If sway crashes, also include a stack trace.
 
@@ -17,7 +21,7 @@ If this doesn't work, use:
 
 * Sway Version:
 
-Obtain a debug log like so:
+Obtain a debug log by running the following command from a TTY:
 
     sway -d 2> ~/sway.log
 
@@ -40,3 +44,5 @@ If you use systemd, you should be able to open the coredump of the most recent c
     coredumpctl gdb sway
 
 And then type `bt full` to obtain the stack trace.
+
+If the lines mentioning sway/wlroots have "??" for the location, your binaries were built without debug symbols, and the stack trace is unlikely to be useful. You can find instructions to compile sway from source [here](https://github.com/swaywm/sway/wiki/Development-Setup#compiling-as-a-subproject). Note that debug symbols are included in Meson builds by default.

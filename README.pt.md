@@ -1,91 +1,66 @@
 # sway
 
-Sway é um compositor [Wayland](http://wayland.freedesktop.org/) compatível com o
-i3. Leia o [FAQ](https://github.com/swaywm/sway/wiki). Participe do [canal
-IRC](http://webchat.freenode.net/?channels=sway&uio=d4) (#sway no
+O sway é um compositor do [Wayland](http://wayland.freedesktop.org/) compatível com o [i3](https://i3wm.org/).
+Leia o [FAQ](https://github.com/swaywm/sway/wiki). Junte-se ao [canal do    
+IRC](http://webchat.freenode.net/?channels=sway&uio=d4) (#sway em
 irc.freenode.net).
 
-[![](https://sr.ht/ICd5.png)](https://sr.ht/ICd5.png)
+Se você gostaria de apoiar o desenvolvimento do sway, por favor, contribua na [página do patreon de
+SirCmpwn](https://patreon.com/sircmpwn).
 
-Se você deseja apoiar o desenvolvimento do Sway, você pode contribuir com o
-SirCmpwn em sua [página no Patreon](https://patreon.com/sircmpwn) ou você
-pode colaborar com [premiações](https://github.com/swaywm/sway/issues/986)
-para recursos específicos. Qualquer um pode requerer uma premiação ao implementar
-o recurso especificado, e você pode criar uma premiação para qualquer recurso que desejar.
-O Patreon é melhor direcionado para a manutenção a longo prazo do Sway.
+## Assinatura das versões
 
-## Ajuda em português
-
-No momento, o suporte em português no canal do IRC **não está ativo**. Em caso de problemas,
-use as [*issues*](https://github.com/swaywm/sway/issues/) do Github (*em inglês*).
-
-A tradução para português é um *trabalho em progresso*, no momento. Caso encontre algum erro
-ou queira colaborar com a tradução, visite
-[essa *issue*](https://github.com/swaywm/sway/issues/1318) para mais informações e não
-exite em enviar quaisquer correções necessárias.
-
-## Assinaturas dos *Releases*
-
-*Releases* são assinadas com a chave
-[B22DA89A](http://pgp.mit.edu/pks/lookup?op=vindex&search=0x52CB6609B22DA89A)
+As versões são assinadas com [B22DA89A](http://pgp.mit.edu/pks/lookup?op=vindex&search=0x52CB6609B22DA89A)
 e publicadas [no GitHub](https://github.com/swaywm/sway/releases).
 
 ## Instalação
 
 ### A partir de pacotes
+O Sway está disponível em várias distribuições. Tente instalar o pacote "sway"
+na sua. Caso não esteja disponível, verifique [esta wiki](https://github.com/swaywm/sway/wiki/Unsupported-packages)
+para se informar a sobre a instalação para sua distribuição.
 
-Sway está disponível em várias distribuições. Verifique se o pacote "sway" está
-disponível a partir do gerenciador de pacotes da sua distribuição. Caso não esteja,
-procure por informações sobre como instalar o Sway na sua distribuição
-[aqui](https://github.com/swaywm/sway/wiki/Unsupported-packages).
+Se você está interessado em criar um pacote do sway para a sua distribuição, verifique canal do IRC
+ou mande um email para sir@cmpwn.com para obter informações.
 
-Se você está interessado em manter um pacote do Sway para a sua distribuição,
-visite o canal no IRC ou mande um email para sir@cmpwn.com (*em inglês*).
+### Compilando a partir do código-fonte
 
-### A partir do código-fonte
+Instale as dependências:
 
-Antes de iniciar a compilação, instale as dependências:
-
-* meson
-* [wlc](https://github.com/Cloudef/wlc)
+* meson \*
+* [wlroots](https://github.com/swaywm/wlroots)
 * wayland
-* xwayland
-* libinput >= 1.6.0
-* libcap
+* wayland-protocols \*
 * pcre
-* json-c >= 0.13
+* json-c
 * pango
 * cairo
-* gdk-pixbuf2 *
-* [scdoc](https://git.sr.ht/~sircmpwn/scdoc) (man pages)
-* git
+* gdk-pixbuf2 (optional: system tray)
+* [scdoc](https://git.sr.ht/~sircmpwn/scdoc) (Opcional: man pages) \*
+* git \*
 
-_\*Dependência apenas de swaybar, swaybg_
+_\*Dependência de tempo de compilação_
 
-Para compilar, execute estes comandos:
+Execute esses comandos:
 
     meson build
     ninja -C build
     sudo ninja -C build install
 
-Em sistemas com logind, configure as seguintes capacidades para o arquivo binário:
-
-    sudo setcap "cap_sys_ptrace,cap_sys_tty_config=eip" /usr/local/bin/sway
-
-Em sistemas sem logind, ative a *flag* de *suid* do arquivo binário:
+Em sistemas sem logind, você precisa preparar o binário do sway:
 
     sudo chmod a+s /usr/local/bin/sway
 
+O sway perderá as privilégios de de root logo após o início do sistema.
+
 ## Configuração
 
-Se você já usa o i3, copie o arquivo de configuração do i3 para `~/.config/sway/config`;
-o Sway lerá o arquivo normalmente. Senão, copie o arquivo de configuração de exemplo
-para `~/.config/sway/config`. É comum esse arquivo estar localizado em
-`/etc/sway/config`. Veja `man 5 sway` para informações sobre configuração.
+Se você já utiliza o i3, então copie os seus arquivos de configuração para `~/.config/sway/config` e
+tudo funcionará normalmente. Caso contrário, copie o arquivo de configuração de exemplo para
+`~/.config/sway/config`. Normalmente, este arquivo está localizado em `/etc/sway/config`.
+Execute `man 5 sway` para se informar sobre a configuração.
 
-## Executando
+## Execução
 
-Execute `sway` a partir de um terminal do Linux. Alguns gerenciadores de *display*
-podem funcionar, porém o Sway não procura manter compatibilidade com esses (segundo
-relatos, o gdm funciona bem com o Sway).
-
+Execute o comando `sway` de um TTY. Alguns gerenciadores de display (ou gerenciadores de login) podem funcionar mas alguns não são suportaods
+pelo sway (o gdm é conhecido por funcionar bem).

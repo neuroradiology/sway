@@ -26,8 +26,22 @@ struct cmd_results *cmd_fullscreen(int argc, char **argv) {
 				"Can't fullscreen an empty workspace");
 	}
 
-	bool is_fullscreen = container &&
-		container->fullscreen_mode != FULLSCREEN_NONE;
+	// If in the scratchpad, operate on the highest container
+	if (container && !container->workspace) {
+		while (container->parent) {
+			container = container->parent;
+		}
+	}
+
+	bool is_fullscreen = false;
+	for (struct sway_container *curr = container; curr; curr = curr->parent) {
+		if (curr->fullscreen_mode != FULLSCREEN_NONE) {
+			container = curr;
+			is_fullscreen = true;
+			break;
+		}
+	}
+
 	bool global = false;
 	bool enable = !is_fullscreen;
 

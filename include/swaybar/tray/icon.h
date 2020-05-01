@@ -3,16 +3,16 @@
 
 #include "list.h"
 
-enum subdir_type {
-	THRESHOLD,
-	SCALABLE,
-	FIXED
-};
-
 struct icon_theme_subdir {
 	char *name;
 	int size;
-	enum subdir_type type;
+
+	enum {
+		THRESHOLD,
+		SCALABLE,
+		FIXED
+	} type;
+
 	int max_size;
 	int min_size;
 	int threshold;
@@ -21,7 +21,7 @@ struct icon_theme_subdir {
 struct icon_theme {
 	char *name;
 	char *comment;
-	char *inherits;
+	list_t *inherits; // char *
 	list_t *directories; // char *
 
 	char *dir;
@@ -39,6 +39,5 @@ void finish_themes(list_t *themes, list_t *basedirs);
  */
 char *find_icon(list_t *themes, list_t *basedirs, char *name, int size,
 		char *theme, int *min_size, int *max_size);
-char *find_icon_in_dir(char *name, char *dir, int *min_size, int *max_size);
 
 #endif

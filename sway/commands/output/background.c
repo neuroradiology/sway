@@ -4,7 +4,6 @@
 #include <string.h>
 #include <strings.h>
 #include <unistd.h>
-#include <wordexp.h>
 #include <errno.h>
 #include "sway/commands.h"
 #include "sway/config.h"
@@ -19,6 +18,16 @@ static const char *bg_options[] = {
 	"fit",
 	"tile",
 };
+
+static bool validate_color(const char *color) {
+	if (strlen(color) != 7 || color[0] != '#') {
+		return false;
+	}
+
+	char *ptr = NULL;
+	strtol(&color[1], &ptr, 16);
+	return *ptr == '\0';
+}
 
 struct cmd_results *output_cmd_background(int argc, char **argv) {
 	if (!config->handler_context.output_config) {
@@ -36,6 +45,10 @@ struct cmd_results *output_cmd_background(int argc, char **argv) {
 	struct output_config *output = config->handler_context.output_config;
 
 	if (strcasecmp(argv[1], "solid_color") == 0) {
+		if (!validate_color(argv[0])) {
+			return cmd_results_new(CMD_INVALID,
+					"Colors should be of the form #RRGGBB");
+		}
 		output->background = strdup(argv[0]);
 		output->background_option = strdup("solid_color");
 		output->background_fallback = NULL;
@@ -65,26 +78,15 @@ struct cmd_results *output_cmd_background(int argc, char **argv) {
 			return cmd_results_new(CMD_INVALID, "Missing background file");
 		}
 
-		wordexp_t p = {0};
 		char *src = join_args(argv, j);
-		while (strstr(src, "  ")) {
-			src = realloc(src, strlen(src) + 2);
-			char *ptr = strstr(src, "  ") + 1;
-			memmove(ptr + 1, ptr, strlen(ptr) + 1);
-			*ptr = '\\';
-		}
-		if (wordexp(src, &p, 0) != 0 || p.we_wordv[0] == NULL) {
+		if (!expand_path(&src)) {
 			struct cmd_results *cmd_res = cmd_results_new(CMD_INVALID,
 				"Invalid syntax (%s)", src);
 			free(src);
-			wordfree(&p);
 			return cmd_res;
 		}
-		free(src);
-		src = join_args(p.we_wordv, p.we_wordc);
-		wordfree(&p);
 		if (!src) {
-			sway_log(SWAY_ERROR, "Failed to duplicate string");
+			sway_log(SWAY_ERROR, "Failed to allocate expanded path");
 			return cmd_results_new(CMD_FAILURE, "Unable to allocate resource");
 		}
 
@@ -130,6 +132,11 @@ struct cmd_results *output_cmd_background(int argc, char **argv) {
 
 		output->background_fallback = NULL;
 		if (argc && *argv[0] == '#') {
+			if (!validate_color(argv[0])) {
+				return cmd_results_new(CMD_INVALID,
+						"fallback color should be of the form #RRGGBB");
+			}
+
 			output->background_fallback = strdup(argv[0]);
 			argc--; argv++;
 

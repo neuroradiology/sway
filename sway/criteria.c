@@ -31,19 +31,68 @@ bool criteria_is_empty(struct criteria *criteria) {
 		&& !criteria->floating
 		&& !criteria->tiling
 		&& !criteria->urgent
-		&& !criteria->workspace;
+		&& !criteria->workspace
+		&& !criteria->pid;
+}
+
+// The error pointer is used for parsing functions, and saves having to pass it
+// as an argument in several places.
+char *error = NULL;
+
+// Returns error string on failure or NULL otherwise.
+static bool generate_regex(pcre **regex, char *value) {
+	const char *reg_err;
+	int offset;
+
+	*regex = pcre_compile(value, PCRE_UTF8 | PCRE_UCP, &reg_err, &offset, NULL);
+
+	if (!*regex) {
+		const char *fmt = "Regex compilation for '%s' failed: %s";
+		int len = strlen(fmt) + strlen(value) + strlen(reg_err) - 3;
+		error = malloc(len);
+		snprintf(error, len, fmt, value, reg_err);
+		return false;
+	}
+
+	return true;
+}
+
+static bool pattern_create(struct pattern **pattern, char *value) {
+	*pattern = calloc(1, sizeof(struct pattern));
+	if (!*pattern) {
+		sway_log(SWAY_ERROR, "Failed to allocate pattern");
+	}
+
+	if (strcmp(value, "__focused__") == 0) {
+		(*pattern)->match_type = PATTERN_FOCUSED;
+	} else {
+		(*pattern)->match_type = PATTERN_PCRE;
+		if (!generate_regex(&(*pattern)->regex, value)) {
+			return false;
+		};
+	}
+	return true;
+}
+
+static void pattern_destroy(struct pattern *pattern) {
+	if (pattern) {
+		if (pattern->regex) {
+			pcre_free(pattern->regex);
+		}
+		free(pattern);
+	}
 }
 
 void criteria_destroy(struct criteria *criteria) {
-	pcre_free(criteria->title);
-	pcre_free(criteria->shell);
-	pcre_free(criteria->app_id);
+	pattern_destroy(criteria->title);
+	pattern_destroy(criteria->shell);
+	pattern_destroy(criteria->app_id);
 #if HAVE_XWAYLAND
-	pcre_free(criteria->class);
-	pcre_free(criteria->instance);
-	pcre_free(criteria->window_role);
+	pattern_destroy(criteria->class);
+	pattern_destroy(criteria->instance);
+	pattern_destroy(criteria->window_role);
 #endif
-	pcre_free(criteria->con_mark);
+	pattern_destroy(criteria->con_mark);
 	free(criteria->workspace);
 	free(criteria->cmdlist);
 	free(criteria->raw);
@@ -96,34 +145,17 @@ static void find_urgent_iterator(struct sway_container *con, void *data) {
 	list_add(urgent_views, con->view);
 }
 
-static bool criteria_matches_view(struct criteria *criteria,
-		struct sway_view *view) {
-	if (criteria->title) {
-		const char *title = view_get_title(view);
-		if (!title || regex_cmp(title, criteria->title) != 0) {
-			return false;
-		}
-	}
+static bool has_container_criteria(struct criteria *criteria) {
+	return criteria->con_mark || criteria->con_id;
+}
 
-	if (criteria->shell) {
-		const char *shell = view_get_shell(view);
-		if (!shell || regex_cmp(shell, criteria->shell) != 0) {
-			return false;
-		}
-	}
-
-	if (criteria->app_id) {
-		const char *app_id = view_get_app_id(view);
-		if (!app_id || regex_cmp(app_id, criteria->app_id) != 0) {
-			return false;
-		}
-	}
-
+static bool criteria_matches_container(struct criteria *criteria,
+		struct sway_container *container) {
 	if (criteria->con_mark) {
 		bool exists = false;
-		struct sway_container *con = view->container;
+		struct sway_container *con = container;
 		for (int i = 0; i < con->marks->length; ++i) {
-			if (regex_cmp(con->marks->items[i], criteria->con_mark) == 0) {
+			if (regex_cmp(con->marks->items[i], criteria->con_mark->regex) == 0) {
 				exists = true;
 				break;
 			}
@@ -134,9 +166,82 @@ static bool criteria_matches_view(struct criteria *criteria,
 	}
 
 	if (criteria->con_id) { // Internal ID
-		if (!view->container || view->container->node.id != criteria->con_id) {
+		if (container->node.id != criteria->con_id) {
 			return false;
 		}
+	}
+
+	return true;
+}
+
+static bool criteria_matches_view(struct criteria *criteria,
+		struct sway_view *view) {
+	struct sway_seat *seat = input_manager_current_seat();
+	struct sway_container *focus = seat_get_focused_container(seat);
+	struct sway_view *focused = focus ? focus->view : NULL;
+
+	if (criteria->title) {
+		const char *title = view_get_title(view);
+		if (!title) {
+			return false;
+		}
+
+		switch (criteria->title->match_type) {
+		case PATTERN_FOCUSED:
+			if (focused && strcmp(title, view_get_title(focused))) {
+				return false;
+			}
+			break;
+		case PATTERN_PCRE:
+			if (regex_cmp(title, criteria->title->regex) != 0) {
+				return false;
+			}
+			break;
+		}
+	}
+
+	if (criteria->shell) {
+		const char *shell = view_get_shell(view);
+		if (!shell) {
+			return false;
+		}
+
+		switch (criteria->shell->match_type) {
+		case PATTERN_FOCUSED:
+			if (focused && strcmp(shell, view_get_shell(focused))) {
+				return false;
+			}
+			break;
+		case PATTERN_PCRE:
+			if (regex_cmp(shell, criteria->shell->regex) != 0) {
+				return false;
+			}
+			break;
+		}
+	}
+
+	if (criteria->app_id) {
+		const char *app_id = view_get_app_id(view);
+		if (!app_id) {
+			return false;
+		}
+
+		switch (criteria->app_id->match_type) {
+		case PATTERN_FOCUSED:
+			if (focused && strcmp(app_id, view_get_app_id(focused))) {
+				return false;
+			}
+			break;
+		case PATTERN_PCRE:
+			if (regex_cmp(app_id, criteria->app_id->regex) != 0) {
+				return false;
+			}
+			break;
+		}
+	}
+
+	if (!criteria_matches_container(criteria, view->container)) {
+		return false;
 	}
 
 #if HAVE_XWAYLAND
@@ -149,22 +254,61 @@ static bool criteria_matches_view(struct criteria *criteria,
 
 	if (criteria->class) {
 		const char *class = view_get_class(view);
-		if (!class || regex_cmp(class, criteria->class) != 0) {
+		if (!class) {
 			return false;
+		}
+
+		switch (criteria->class->match_type) {
+		case PATTERN_FOCUSED:
+			if (focused && strcmp(class, view_get_class(focused))) {
+				return false;
+			}
+			break;
+		case PATTERN_PCRE:
+			if (regex_cmp(class, criteria->class->regex) != 0) {
+				return false;
+			}
+			break;
 		}
 	}
 
 	if (criteria->instance) {
 		const char *instance = view_get_instance(view);
-		if (!instance || regex_cmp(instance, criteria->instance) != 0) {
+		if (!instance) {
 			return false;
+		}
+
+		switch (criteria->instance->match_type) {
+		case PATTERN_FOCUSED:
+			if (focused && strcmp(instance, view_get_instance(focused))) {
+				return false;
+			}
+			break;
+		case PATTERN_PCRE:
+			if (regex_cmp(instance, criteria->instance->regex) != 0) {
+				return false;
+			}
+			break;
 		}
 	}
 
 	if (criteria->window_role) {
-		const char *role = view_get_window_role(view);
-		if (!role || regex_cmp(role, criteria->window_role) != 0) {
+		const char *window_role = view_get_window_role(view);
+		if (!window_role) {
 			return false;
+		}
+
+		switch (criteria->window_role->match_type) {
+		case PATTERN_FOCUSED:
+			if (focused && strcmp(window_role, view_get_window_role(focused))) {
+				return false;
+			}
+			break;
+		case PATTERN_PCRE:
+			if (regex_cmp(window_role, criteria->window_role->regex) != 0) {
+				return false;
+			}
+			break;
 		}
 	}
 
@@ -208,7 +352,27 @@ static bool criteria_matches_view(struct criteria *criteria,
 
 	if (criteria->workspace) {
 		struct sway_workspace *ws = view->container->workspace;
-		if (!ws || strcmp(ws->name, criteria->workspace) != 0) {
+		if (!ws) {
+			return false;
+		}
+
+		switch (criteria->workspace->match_type) {
+		case PATTERN_FOCUSED:
+			if (focused &&
+					strcmp(ws->name, focused->container->workspace->name)) {
+				return false;
+			}
+			break;
+		case PATTERN_PCRE:
+			if (regex_cmp(ws->name, criteria->workspace->regex) != 0) {
+				return false;
+			}
+			break;
+		}
+	}
+
+	if (criteria->pid) {
+		if (criteria->pid != view->pid) {
 			return false;
 		}
 	}
@@ -233,46 +397,28 @@ struct match_data {
 	list_t *matches;
 };
 
-static void criteria_get_views_iterator(struct sway_container *container,
+static void criteria_get_containers_iterator(struct sway_container *container,
 		void *data) {
 	struct match_data *match_data = data;
 	if (container->view) {
 		if (criteria_matches_view(match_data->criteria, container->view)) {
-			list_add(match_data->matches, container->view);
+			list_add(match_data->matches, container);
+		}
+	} else if (has_container_criteria(match_data->criteria)) {
+		if (criteria_matches_container(match_data->criteria, container)) {
+			list_add(match_data->matches, container);
 		}
 	}
 }
 
-list_t *criteria_get_views(struct criteria *criteria) {
+list_t *criteria_get_containers(struct criteria *criteria) {
 	list_t *matches = create_list();
 	struct match_data data = {
 		.criteria = criteria,
 		.matches = matches,
 	};
-	root_for_each_container(criteria_get_views_iterator, &data);
+	root_for_each_container(criteria_get_containers_iterator, &data);
 	return matches;
-}
-
-// The error pointer is used for parsing functions, and saves having to pass it
-// as an argument in several places.
-char *error = NULL;
-
-// Returns error string on failure or NULL otherwise.
-static bool generate_regex(pcre **regex, char *value) {
-	const char *reg_err;
-	int offset;
-
-	*regex = pcre_compile(value, PCRE_UTF8 | PCRE_UCP, &reg_err, &offset, NULL);
-
-	if (!*regex) {
-		const char *fmt = "Regex compilation for '%s' failed: %s";
-		int len = strlen(fmt) + strlen(value) + strlen(reg_err) - 3;
-		error = malloc(len);
-		snprintf(error, len, fmt, value, reg_err);
-		return false;
-	}
-
-	return true;
 }
 
 #if HAVE_XWAYLAND
@@ -319,6 +465,7 @@ enum criteria_token {
 	T_TITLE,
 	T_URGENT,
 	T_WORKSPACE,
+	T_PID,
 
 	T_INVALID,
 };
@@ -354,77 +501,10 @@ static enum criteria_token token_from_name(char *name) {
 		return T_TILING;
 	} else if (strcmp(name, "floating") == 0) {
 		return T_FLOATING;
+	} else if (strcmp(name, "pid") == 0) {
+		return T_PID;
 	}
 	return T_INVALID;
-}
-
-/**
- * Get a property of the focused view.
- *
- * Note that we are taking the focused view at the time of criteria parsing, not
- * at the time of execution. This is because __focused__ only makes sense when
- * using criteria via IPC. Using __focused__ in config is not useful because
- * criteria is only executed once per view.
- */
-static char *get_focused_prop(enum criteria_token token) {
-	struct sway_seat *seat = input_manager_current_seat();
-	struct sway_container *focus = seat_get_focused_container(seat);
-
-	if (!focus || !focus->view) {
-		return NULL;
-	}
-	struct sway_view *view = focus->view;
-	const char *value = NULL;
-
-	switch (token) {
-	case T_APP_ID:
-		value = view_get_app_id(view);
-		break;
-	case T_SHELL:
-		value = view_get_shell(view);
-		break;
-	case T_TITLE:
-		value = view_get_title(view);
-		break;
-	case T_WORKSPACE:
-		if (focus->workspace) {
-			value = focus->workspace->name;
-		}
-		break;
-	case T_CON_ID:
-		if (view->container == NULL) {
-			return NULL;
-		}
-		size_t id = view->container->node.id;
-		size_t id_size = snprintf(NULL, 0, "%zu", id) + 1;
-		char *id_str = malloc(id_size);
-		snprintf(id_str, id_size, "%zu", id);
-		value = id_str;
-		break;
-#if HAVE_XWAYLAND
-	case T_CLASS:
-		value = view_get_class(view);
-		break;
-	case T_INSTANCE:
-		value = view_get_instance(view);
-		break;
-	case T_WINDOW_ROLE:
-		value = view_get_window_role(view);
-		break;
-	case T_WINDOW_TYPE: // These do not support __focused__
-	case T_ID:
-#endif
-	case T_CON_MARK:
-	case T_FLOATING:
-	case T_TILING:
-	case T_URGENT:
-	case T_INVALID:
-		break;
-	}
-	if (value) {
-		return strdup(value);
-	}
-	return NULL;
 }
 
 static bool parse_token(struct criteria *criteria, char *name, char *value) {
@@ -437,15 +517,8 @@ static bool parse_token(struct criteria *criteria, char *name, char *value) {
 		return false;
 	}
 
-	char *effective_value = NULL;
-	if (value && strcmp(value, "__focused__") == 0) {
-		effective_value = get_focused_prop(token);
-	} else if (value) {
-		effective_value = strdup(value);
-	}
-
 	// Require value, unless token is floating or tiled
-	if (!effective_value && token != T_FLOATING && token != T_TILING) {
+	if (!value && token != T_FLOATING && token != T_TILING) {
 		const char *fmt = "Token '%s' requires a value";
 		int len = strlen(fmt) + strlen(name) - 1;
 		error = malloc(len);
@@ -456,41 +529,48 @@ static bool parse_token(struct criteria *criteria, char *name, char *value) {
 	char *endptr = NULL;
 	switch (token) {
 	case T_TITLE:
-		generate_regex(&criteria->title, effective_value);
+		pattern_create(&criteria->title, value);
 		break;
 	case T_SHELL:
-		generate_regex(&criteria->shell, effective_value);
+		pattern_create(&criteria->shell, value);
 		break;
 	case T_APP_ID:
-		generate_regex(&criteria->app_id, effective_value);
+		pattern_create(&criteria->app_id, value);
 		break;
 	case T_CON_ID:
-		criteria->con_id = strtoul(effective_value, &endptr, 10);
-		if (*endptr != 0) {
-			error = strdup("The value for 'con_id' should be '__focused__' or numeric");
+		if (strcmp(value, "__focused__") == 0) {
+			struct sway_seat *seat = input_manager_current_seat();
+			struct sway_container *focus = seat_get_focused_container(seat);
+			struct sway_view *view = focus ? focus->view : NULL;
+			criteria->con_id = view ? view->container->node.id : 0;
+		} else {
+			criteria->con_id = strtoul(value, &endptr, 10);
+			if (*endptr != 0) {
+				error = strdup("The value for 'con_id' should be '__focused__' or numeric");
+			}
 		}
 		break;
 	case T_CON_MARK:
-		generate_regex(&criteria->con_mark, effective_value);
+		pattern_create(&criteria->con_mark, value);
 		break;
 #if HAVE_XWAYLAND
 	case T_CLASS:
-		generate_regex(&criteria->class, effective_value);
+		pattern_create(&criteria->class, value);
 		break;
 	case T_ID:
-		criteria->id = strtoul(effective_value, &endptr, 10);
+		criteria->id = strtoul(value, &endptr, 10);
 		if (*endptr != 0) {
 			error = strdup("The value for 'id' should be numeric");
 		}
 		break;
 	case T_INSTANCE:
-		generate_regex(&criteria->instance, effective_value);
+		pattern_create(&criteria->instance, value);
 		break;
 	case T_WINDOW_ROLE:
-		generate_regex(&criteria->window_role, effective_value);
+		pattern_create(&criteria->window_role, value);
 		break;
 	case T_WINDOW_TYPE:
-		criteria->window_type = parse_window_type(effective_value);
+		criteria->window_type = parse_window_type(value);
 		break;
 #endif
 	case T_FLOATING:
@@ -500,13 +580,13 @@ static bool parse_token(struct criteria *criteria, char *name, char *value) {
 		criteria->tiling = true;
 		break;
 	case T_URGENT:
-		if (strcmp(effective_value, "latest") == 0 ||
-				strcmp(effective_value, "newest") == 0 ||
-				strcmp(effective_value, "last") == 0 ||
-				strcmp(effective_value, "recent") == 0) {
+		if (strcmp(value, "latest") == 0 ||
+				strcmp(value, "newest") == 0 ||
+				strcmp(value, "last") == 0 ||
+				strcmp(value, "recent") == 0) {
 			criteria->urgent = 'l';
-		} else if (strcmp(effective_value, "oldest") == 0 ||
-				strcmp(effective_value, "first") == 0) {
+		} else if (strcmp(value, "oldest") == 0 ||
+				strcmp(value, "first") == 0) {
 			criteria->urgent = 'o';
 		} else {
 			error =
@@ -515,12 +595,17 @@ static bool parse_token(struct criteria *criteria, char *name, char *value) {
 		}
 		break;
 	case T_WORKSPACE:
-		criteria->workspace = strdup(effective_value);
+		pattern_create(&criteria->workspace, value);
+		break;
+	case T_PID:
+		criteria->pid = strtoul(value, &endptr, 10);
+		if (*endptr != 0) {
+			error = strdup("The value for 'pid' should be numeric");
+		}
 		break;
 	case T_INVALID:
 		break;
 	}
-	free(effective_value);
 
 	if (error) {
 		return false;
@@ -624,8 +709,8 @@ struct criteria *criteria_parse(char *raw, char **error_arg) {
 				in_quotes = false;
 			}
 			unescape(value);
+			sway_log(SWAY_DEBUG, "Found pair: %s=%s", name, value);
 		}
-		sway_log(SWAY_DEBUG, "Found pair: %s=%s", name, value);
 		if (!parse_token(criteria, name, value)) {
 			*error_arg = error;
 			goto cleanup;
@@ -657,4 +742,37 @@ cleanup:
 	free(value);
 	criteria_destroy(criteria);
 	return NULL;
+}
+
+bool criteria_is_equal(struct criteria *left, struct criteria *right) {
+	if (left->type != right->type) {
+		return false;
+	}
+	// XXX Only implemented for CT_NO_FOCUS for now.
+	if (left->type == CT_NO_FOCUS) {
+		return strcmp(left->raw, right->raw) == 0;
+	}
+	if (left->type == CT_COMMAND) {
+		return strcmp(left->raw, right->raw) == 0
+				&& strcmp(left->cmdlist, right->cmdlist) == 0;
+	}
+	return false;
+}
+
+bool criteria_already_exists(struct criteria *criteria) {
+	// XXX Only implemented for CT_NO_FOCUS and CT_COMMAND for now.
+	// While criteria_is_equal also obeys this limitation, this is a shortcut
+	// to avoid processing the list.
+	if (criteria->type != CT_NO_FOCUS && criteria->type != CT_COMMAND) {
+		return false;
+	}
+
+	list_t *criterias = config->criteria;
+	for (int i = 0; i < criterias->length; ++i) {
+		struct criteria *existing = criterias->items[i];
+		if (criteria_is_equal(criteria, existing)) {
+			return true;
+		}
+	}
+	return false;
 }
